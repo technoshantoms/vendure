@@ -1,2 +1,3 @@
-export * from './mollie.plugin';
 export * from './';
+export { toAmount } from './mollie.helpers';
+export * from './mollie.plugin';

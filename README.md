@@ -1,179 +1,66 @@
-# Vendure
+<p align="center">
+  <a href="https://vendure.io">
+    <img alt="Vendure logo" height="60" width="auto" src="https://a.storyblok.com/f/328257/699x480/8dbb4c7a3c/logo-icon.png">
+  </a>
+</p>
 
-A headless [GraphQL](https://graphql.org/) ecommerce framework built on [Node.js](https://nodejs.org) with [Nest](https://nestjs.com/) & [TypeScript](http://www.typescriptlang.org/), with a focus on developer productivity and ease of customization.
+<h1 align="center">
+  Vendure Core
+</h1>
+<h3 align="center">
+    The Open Source Foundation of Vendure — The Enterprise Commerce Platform
+</h3>
+<h4 align="center">
+  <a href="https://docs.vendure.io">Documentation</a> |
+  <a href="https://vendure.io">Website</a>
+</h4>
 
-[![Build Status](https://github.com/vendure-ecommerce/vendure/workflows/Build%20&%20Test/badge.svg)](https://github.com/vendure-ecommerce/vendure/actions) 
-![Publish & Install](https://github.com/vendure-ecommerce/vendure/workflows/Publish%20&%20Install/badge.svg)
-[![lerna](https://img.shields.io/badge/maintained%20with-lerna-cc00ff.svg)](https://lernajs.io/)
+<p align="center">
+  <a href="https://github.com/vendurehq/vendure/blob/master/LICENSE.md">
+    <img src="https://img.shields.io/badge/license-GPL-blue.svg" alt="Vendure is released under the GPLv3 license." />
+  </a>
+  <a href="https://twitter.com/intent/follow?screen_name=vendure_io">
+    <img src="https://img.shields.io/twitter/follow/vendure_io" alt="Follow @vendure_io" />
+  </a>
+  <a href="https://vendure.io/community">
+    <img src="https://img.shields.io/badge/join-our%20discord-7289DA.svg" alt="Join our Discord" />
+  </a>
+  <a href="https://github.com/vendurehq/vendure/blob/master/CONTRIBUTING.md">
+    <img src="https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=flat" alt="PRs welcome!" />
+  </a>
+</p>
 
-### [www.vendure.io](https://www.vendure.io/)
+## What is Vendure Core
 
-* [Getting Started](https://www.vendure.io/docs/getting-started/): Get Vendure up and running locally in a matter of minutes with a single command
-* [Live Demo](https://demo.vendure.io/)
-* [Vendure Discord](https://www.vendure.io/community) Join us on Discord for support and answers to your questions
+Vendure Core is the open source heart of [Vendure](https://vendure.io), the enterprise commerce platform. Built with _TypeScript_ and _Node.js_, it provides a robust foundation for building enterprise-grade digital commerce applications with exceptional scalability and maintainability.
 
-## Structure
+- **Built for heavy customization**: Extensible plugin architecture allows you to tailor every aspect of your commerce solution
+- **Modern, AI-optimized tech stack**: Built on TypeScript, Node.js, NestJS, and GraphQL for outstanding performance and developer experience
+- **Headless architecture**: API-first design enables seamless multichannel commerce across any frontend
+- **Enterprise-ready**: Trusted by thousands of teams worldwide, from startups to Fortune 500 companies
+- **Rich feature set**: Comprehensive out-of-the-box functionality with customizable admin dashboard and commerce framework
 
-This project is a monorepo managed with [Lerna](https://github.com/lerna/lerna). Several npm packages are published from this repo, which can be found in the `packages/` directory.
+Whether you're building a B2B platform, multi-vendor marketplace, or D2C storefront, Vendure Core provides the flexible foundation to create unique commerce experiences tailored to your business needs.
 
-```
-vendure/
-├── docs/           # Documentation source
-├── e2e-common/     # Shared config for package e2e tests
-├── packages/       # Source for the Vendure server, admin-ui & plugin packages
-├── scripts/
-    ├── changelog/  # Scripts used to generate the changelog based on the git history
-    ├── codegen/    # Scripts used to generate TypeScript code from the GraphQL APIs
-    ├── docs/       # Scripts used to generate documentation markdown from the source
-```
+## Getting Started
 
-## Development
+Visit our [Getting Started guide](https://docs.vendure.io/guides/getting-started/installation/) to get Vendure Core up and running locally in _less than 2 minutes_ with a single command.
 
-The following instructions are for those who want to develop the Vendure core framework or plugins (e.g. if you intend to make a pull request). For instructions on how to build a project *using* Vendure, please see the [Getting Started guide](https://www.vendure.io/docs/getting-started/).
+**Need Help?** Our community is here to help, join [our Discord](https://www.vendure.io/community) for support and discussions!
 
-### 1. Install top-level dependencies
+## Upgrades & Plugins 
 
-`yarn`
+Patch releases ship monthly, minor releases quarterly. Check out our [release notes](https://github.com/vendurehq/vendure/releases) to keep up-to-date with the latest releases.
 
-The root directory has a `package.json` which contains build-related dependencies for tasks including:
 
-* Building & deploying the docs 
-* Generating TypeScript types from the GraphQL schema
-* Linting, formatting & testing tasks to run on git commit & push
+## Contribution
 
-> Note:
-> When you do `yarn` for the first time, you will need to manually create the `package` folder under [/packages/admin-ui](/packages/admin-ui).
+Contributions to Vendure Core are welcome and highly appreciated! Whether you're fixing bugs, adding features, or improving documentation, your help makes Vendure Core better for everyone.
 
-### 2. Bootstrap the packages
+Our **[Contribution Guide](./CONTRIBUTING.md)** is covering everything from setting up your development environment to submitting your first pull request.
 
-`yarn bootstrap`
-
-This runs the Lerna "bootstrap" command, which cross-links monorepo dependencies.
-
-### 3. Build all packages
-
-`yarn build`
-
-Packages must be built (i.e. TypeScript compiled, admin ui app built, certain assets copied etc.) before being used.
-
-Note that this can take a few minutes.
-
-### 4. Set up the server
-
-The server requires an SQL database to be available. The simplest option is to use SQLite, but if you have Docker available you can use the [dev-server docker-compose file](./packages/dev-server/docker-compose.yml) which will start up both MariaDB and Postgres as well as their GUI management tools.
-
-Vendure uses [TypeORM](http://typeorm.io), and officially supports **MySQL**, **PostgreSQL** and **SQLite**, though other TypeORM-supported databases may work.
-
-1. Configure the [dev config](./packages/dev-server/dev-config.ts), making sure the connection settings in the `getDbConfig()` function are correct for the database type you will be using.
-2. Create the database using your DB admin tool of choice (e.g. phpMyAdmin if you are using the docker image suggested above). Name it according to the `getDbConfig()` settings. If you are using SQLite, you can skip this step.
-3. Populate mock data: 
-   ```bash
-    cd packages/dev-server
-    DB=<mysql|postgres|sqlite> yarn populate
-    ```
-   If you do not specify the `DB` variable, it will default to "mysql".
-
-### 5. Run the dev server
-
-```
-cd packages/dev-server
-DB=<mysql|postgres|sqlite> yarn start
-```
-Or if you are in the root package 
-```
-DB=<mysql|postgres|sqlite> yarn dev-server:start
-```
-If you do not specify the `DB` argument, it will default to "mysql".
-
-### Testing admin ui changes locally
-
-If you are making changes to the admin ui, you need to start the admin ui independent from the dev-server:
-
-1. `cd packages/admin-ui`
-2. `yarn start`
-3. Go to http://localhost:4200 and log in with "superadmin", "superadmin"
-
-This will auto restart when you make changes to the admin ui. You don't need this step when you just use the admin ui just
-to test backend changes.
-
-### Testing your changes locally
-This example shows how to test changes to the `payments-plugin` package locally, but it will also work for other packages.
-
-1. Open 2 terminal windows:
-
-- Terminal 1 for watching and compiling the changes of the package you are developing
-- Terminal 2 for running the dev-server
-
-```shell
-# Terminal 1
-cd packages/payments-plugin
-yarn watch
-```
-:warning: If you are developing changes for the `core`package, you also need to watch the `common` package:
-```shell
-# Terminal 1
-# Root of the project
-yarn watch:core-common
-```
-
-2. After the changes in your package are compiled you have to stop and restart the dev-server:
-
-```shell
-# Terminal 2
-cd packages/dev-server
-DB=sqlite yarn start
-```
-
-3. The dev-server will now have your local changes from the changed package.
-
-:information_source: Lerna links to the `dist` folder of the packages, so you **don't** need to rerun 'yarn bootstrap'
-
-### Code generation
-
-[graphql-code-generator](https://github.com/dotansimha/graphql-code-generator) is used to automatically create TypeScript interfaces for all GraphQL server operations and admin ui queries. These generated interfaces are used in both the admin ui and the server.
-
-Running `yarn codegen` will generate the following files:
-
-* [`packages/common/src/generated-types.ts`](./packages/common/src/generated-types.ts): Types, Inputs & resolver args relating to the Admin API
-* [`packages/common/src/generated-shop-types.ts`](./packages/common/src/generated-shop-types.ts): Types, Inputs & resolver args relating to the Shop API
-* [`packages/admin-ui/src/lib/core/src/common/generated-types.ts`](./packages/admin-ui/src/lib/core/src/common/generated-types.ts): Types & operations relating to the admin-ui queries & mutations.
-* [`packages/admin-ui/src/lib/core/src/common/introspection-result.ts`](./packages/admin-ui/src/lib/core/src/common/introspection-result.ts): Used by the Apollo Client [`IntrospectionFragmentMatcher`](https://www.apollographql.com/docs/react/data/fragments/#fragments-on-unions-and-interfaces) to correctly handle fragments in the Admin UI.
-* Also generates types used in e2e tests in those packages which feature e2e tests (core, elasticsearch-plugin, asset-server-plugin etc).
-
-### Testing
-
-#### Server Unit Tests
-
-The core and several other packages have unit tests which are can be run all together by running `yarn test` from the root directory, or individually by running it from the package directory.
-
-Unit tests are co-located with the files which they test, and have the suffix `.spec.ts`.
-
-#### End-to-end Tests
-
-Certain packages have e2e tests, which are located at `/packages/<name>/e2e/`. All e2e tests can be run by running `yarn e2e` from the root directory, or individually by running it from the package directory.
-
-e2e tests use the `@vendure/testing` package. For details of how the setup works, see the [Testing docs](https://www.vendure.io/docs/developer-guide/testing/)
-
-When **debugging e2e tests**, set an environment variable `E2E_DEBUG=true` which will increase the global Jest timeout and allow you to step through the e2e tests without the tests automatically failing due to timeout.
-
-### Release Process
-
-All packages in this repo are released at every version change (using [Lerna's fixed mode](https://github.com/lerna/lerna#fixedlocked-mode-default)). This simplifies both the development (tracking multiple disparate versions is tough) and also the developer experience for users of the framework (it is simple to see that all packages are up-to-date and compatible).
-
-To make a release:
-
-##### 1. `yarn publish-release`
-
-It will run `lerna publish` which will prompt for which version to update to. Although we are using [conventional commits](https://www.conventionalcommits.org), the version is not automatically being calculated from the commit messages. Therefore the next version should be manually selected. 
-
-Next it will build all packages to ensure the distributed files are up to date.
-
-Finally the command will create changelog entries for this release.
-
-##### 2. `git push origin master --follow-tags`
-
-The reason we do not rely on Lerna to push the release to Git is that this repo has a lengthy pre-push hook which runs all tests and builds the admin ui. This long wait then invalidates the npm OTP and the publish will fail. So the solution is to publish first and then push.
+**Ready to get started?** Check out [these issues](https://github.com/vendurehq/vendure/issues?q=is%3Aissue%20state%3Aopen%20label%3A%22%F0%9F%91%8B%20contributions%20welcome%22) for a good first task to start!
 
 ## License
 
-MIT
+Vendure Core is licensed under the [GPLv3 license](./LICENSE.md). To learn more about the full Vendure platform and cloud offering, check out our [pricing page](https://vendure.io/pricing).

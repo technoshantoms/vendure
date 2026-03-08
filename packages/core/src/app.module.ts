@@ -1,4 +1,5 @@
 import { MiddlewareConsumer, Module, NestModule, OnApplicationShutdown } from '@nestjs/common';
+import cookieSession from 'cookie-session';
 
 import { ApiModule } from './api/api.module';
 import { Middleware, MiddlewareHandler } from './common';
@@ -12,6 +13,7 @@ import { I18nService } from './i18n/i18n.service';
 import { PluginModule } from './plugin/plugin.module';
 import { ProcessContextModule } from './process-context/process-context.module';
 import { ServiceModule } from './service/service.module';
+import { TelemetryModule } from './telemetry/telemetry.module';
 
 @Module({
     imports: [
@@ -23,21 +25,44 @@ import { ServiceModule } from './service/service.module';
         HealthCheckModule,
         ServiceModule,
         ConnectionModule,
+        TelemetryModule,
     ],
 })
 export class AppModule implements NestModule, OnApplicationShutdown {
-    constructor(private configService: ConfigService, private i18nService: I18nService) {}
+    constructor(
+        private configService: ConfigService,
+        private i18nService: I18nService,
+    ) {}
 
     configure(consumer: MiddlewareConsumer) {
         const { adminApiPath, shopApiPath, middleware } = this.configService.apiOptions;
+        const { cookieOptions } = this.configService.authOptions;
+
         const i18nextHandler = this.i18nService.handle();
         const defaultMiddleware: Middleware[] = [
             { handler: i18nextHandler, route: adminApiPath },
             { handler: i18nextHandler, route: shopApiPath },
         ];
+
         const allMiddleware = defaultMiddleware.concat(middleware);
+
+        // If the Admin API and Shop API should have specific cookies names, we need to create separate cookie sessions
+        if (typeof cookieOptions?.name === 'object') {
+            const shopApiCookieName = cookieOptions.name.shop;
+            const adminApiCookieName = cookieOptions.name.admin;
+            allMiddleware.push({
+                handler: cookieSession({ ...cookieOptions, name: adminApiCookieName }),
+                route: adminApiPath,
+            });
+            allMiddleware.push({
+                handler: cookieSession({ ...cookieOptions, name: shopApiCookieName }),
+                route: shopApiPath,
+            });
+        }
+
         const consumableMiddlewares = allMiddleware.filter(mid => !mid.beforeListen);
         const middlewareByRoute = this.groupMiddlewareByRoute(consumableMiddlewares);
+
         for (const [route, handlers] of Object.entries(middlewareByRoute)) {
             consumer.apply(...handlers).forRoutes(route);
         }
@@ -50,7 +75,7 @@ export class AppModule implements NestModule, OnApplicationShutdown {
     }
 
     /**
-     * Groups middleware handlers together in an object with the route as the key.
+     * Groups middleware handler together in an object with the route as the key.
      */
     private groupMiddlewareByRoute(middlewareArray: Middleware[]): { [route: string]: MiddlewareHandler[] } {
         const result = {} as { [route: string]: MiddlewareHandler[] };

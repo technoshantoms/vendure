@@ -3,12 +3,14 @@ import { UpdateCustomerInput as UpdateCustomerShopInput } from '@vendure/common/
 import {
     HistoryEntryListOptions,
     HistoryEntryType,
+    OrderLineInput,
     UpdateAddressInput,
     UpdateCustomerInput,
 } from '@vendure/common/lib/generated-types';
 import { ID, PaginatedList, Type } from '@vendure/common/lib/shared-types';
 
 import { RequestContext } from '../../api/common/request-context';
+import { Instrument } from '../../common/instrument-decorator';
 import { TransactionalConnection } from '../../connection/transactional-connection';
 import { Administrator } from '../../entity/administrator/administrator.entity';
 import { CustomerHistoryEntry } from '../../entity/history-entry/customer-history-entry.entity';
@@ -23,7 +25,6 @@ import { PaymentState } from '../helpers/payment-state-machine/payment-state';
 import { RefundState } from '../helpers/refund-state-machine/refund-state';
 
 import { AdministratorService } from './administrator.service';
-
 export interface CustomerHistoryEntryData {
     [HistoryEntryType.CUSTOMER_REGISTERED]: {
         strategy: string;
@@ -50,9 +51,9 @@ export interface CustomerHistoryEntryData {
     [HistoryEntryType.CUSTOMER_ADDRESS_DELETED]: {
         address: string;
     };
-    [HistoryEntryType.CUSTOMER_PASSWORD_UPDATED]: {};
-    [HistoryEntryType.CUSTOMER_PASSWORD_RESET_REQUESTED]: {};
-    [HistoryEntryType.CUSTOMER_PASSWORD_RESET_VERIFIED]: {};
+    [HistoryEntryType.CUSTOMER_PASSWORD_UPDATED]: Record<string, never>;
+    [HistoryEntryType.CUSTOMER_PASSWORD_RESET_REQUESTED]: Record<string, never>;
+    [HistoryEntryType.CUSTOMER_PASSWORD_RESET_VERIFIED]: Record<string, never>;
     [HistoryEntryType.CUSTOMER_EMAIL_UPDATE_REQUESTED]: {
         oldEmailAddress: string;
         newEmailAddress: string;
@@ -85,7 +86,7 @@ export interface OrderHistoryEntryData {
         fulfillmentId: ID;
     };
     [HistoryEntryType.ORDER_CANCELLATION]: {
-        orderItemIds: ID[];
+        lines: OrderLineInput[];
         shippingCancelled: boolean;
         reason?: string;
     };
@@ -107,6 +108,13 @@ export interface OrderHistoryEntryData {
     };
     [HistoryEntryType.ORDER_MODIFIED]: {
         modificationId: ID;
+    };
+    [HistoryEntryType.ORDER_CUSTOMER_UPDATED]: {
+        previousCustomerId?: ID;
+        previousCustomerName?: ID;
+        newCustomerId: ID;
+        newCustomerName: ID;
+        note?: string;
     };
 }
 
@@ -156,7 +164,7 @@ export interface UpdateCustomerHistoryEntryArgs<T extends keyof CustomerHistoryE
  * First of all we'd extend the GraphQL `HistoryEntryType` enum for our new type as part of a plugin
  *
  * @example
- * ```TypeScript
+ * ```ts
  * import { PluginCommonModule, VendurePlugin } from '\@vendure/core';
  * import { VerificationService } from './verification.service';
  *
@@ -179,7 +187,7 @@ export interface UpdateCustomerHistoryEntryArgs<T extends keyof CustomerHistoryE
  * and [ambient modules](https://www.typescriptlang.org/docs/handbook/modules.html#ambient-modules) features.
  *
  * @example
- * ```TypeScript
+ * ```ts
  * // types.ts
  * import { CustomerHistoryEntryData } from '\@vendure/core';
  *
@@ -203,7 +211,7 @@ export interface UpdateCustomerHistoryEntryArgs<T extends keyof CustomerHistoryE
  * Now that we have our types set up, we can use the HistoryService to add a new HistoryEntry in a type-safe manner:
  *
  * @example
- * ```TypeScript
+ * ```ts
  * // verification.service.ts
  * import { Injectable } from '\@nestjs/common';
  * import { RequestContext } from '\@vendure/core';
@@ -230,14 +238,15 @@ export interface UpdateCustomerHistoryEntryArgs<T extends keyof CustomerHistoryE
  *   }
  * }
  * ```
- * {{% alert %}}
+ * :::info
  * It is also possible to define a UI component to display custom history entry types. See the
- * [Custom History Timeline Components guide]({{< relref "custom-timeline-components" >}}).
- * {{% /alert %}}
+ * [Custom History Timeline Components guide](/extending-the-admin-ui/custom-timeline-components/).
+ * :::
  *
  * @docsCategory services
  */
 @Injectable()
+@Instrument()
 export class HistoryService {
     constructor(
         private connection: TransactionalConnection,
@@ -282,7 +291,7 @@ export class HistoryService {
             administrator,
         });
         const history = await this.connection.getRepository(ctx, OrderHistoryEntry).save(entry);
-        this.eventBus.publish(new HistoryEntryEvent(ctx, history, 'created', 'order', { type, data }));
+        await this.eventBus.publish(new HistoryEntryEvent(ctx, history, 'created', 'order', { type, data }));
         return history;
     }
 
@@ -323,7 +332,9 @@ export class HistoryService {
             administrator,
         });
         const history = await this.connection.getRepository(ctx, CustomerHistoryEntry).save(entry);
-        this.eventBus.publish(new HistoryEntryEvent(ctx, history, 'created', 'customer', { type, data }));
+        await this.eventBus.publish(
+            new HistoryEntryEvent(ctx, history, 'created', 'customer', { type, data }),
+        );
         return history;
     }
 
@@ -346,7 +357,7 @@ export class HistoryService {
             entry.administrator = administrator;
         }
         const newEntry = await this.connection.getRepository(ctx, OrderHistoryEntry).save(entry);
-        this.eventBus.publish(new HistoryEntryEvent(ctx, entry, 'updated', 'order', args));
+        await this.eventBus.publish(new HistoryEntryEvent(ctx, entry, 'updated', 'order', args));
         return newEntry;
     }
 
@@ -354,7 +365,7 @@ export class HistoryService {
         const entry = await this.connection.getEntityOrThrow(ctx, OrderHistoryEntry, id);
         const deletedEntry = new OrderHistoryEntry(entry);
         await this.connection.getRepository(ctx, OrderHistoryEntry).remove(entry);
-        this.eventBus.publish(new HistoryEntryEvent(ctx, deletedEntry, 'deleted', 'order', id));
+        await this.eventBus.publish(new HistoryEntryEvent(ctx, deletedEntry, 'deleted', 'order', id));
     }
 
     async updateCustomerHistoryEntry<T extends keyof CustomerHistoryEntryData>(
@@ -373,7 +384,7 @@ export class HistoryService {
             entry.administrator = administrator;
         }
         const newEntry = await this.connection.getRepository(ctx, CustomerHistoryEntry).save(entry);
-        this.eventBus.publish(new HistoryEntryEvent(ctx, entry, 'updated', 'customer', args));
+        await this.eventBus.publish(new HistoryEntryEvent(ctx, entry, 'updated', 'customer', args));
         return newEntry;
     }
 
@@ -381,13 +392,13 @@ export class HistoryService {
         const entry = await this.connection.getEntityOrThrow(ctx, CustomerHistoryEntry, id);
         const deletedEntry = new CustomerHistoryEntry(entry);
         await this.connection.getRepository(ctx, CustomerHistoryEntry).remove(entry);
-        this.eventBus.publish(new HistoryEntryEvent(ctx, deletedEntry, 'deleted', 'customer', id));
+        await this.eventBus.publish(new HistoryEntryEvent(ctx, deletedEntry, 'deleted', 'customer', id));
     }
 
     private async getAdministratorFromContext(ctx: RequestContext): Promise<Administrator | undefined> {
         const administrator = ctx.activeUserId
             ? await this.administratorService.findOneByUserId(ctx, ctx.activeUserId)
-            : undefined;
-        return administrator;
+            : null;
+        return administrator ?? undefined;
     }
 }

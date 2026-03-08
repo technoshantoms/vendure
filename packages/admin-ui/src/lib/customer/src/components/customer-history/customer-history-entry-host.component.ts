@@ -1,6 +1,5 @@
 import {
     Component,
-    ComponentFactoryResolver,
     ComponentRef,
     EventEmitter,
     Input,
@@ -20,18 +19,21 @@ import {
 
 @Component({
     selector: 'vdr-customer-history-entry-host',
-    template: ` <vdr-timeline-entry
-        [displayType]="instance.getDisplayType(entry)"
-        [iconShape]="instance.getIconShape && instance.getIconShape(entry)"
-        [createdAt]="entry.createdAt"
-        [name]="instance.getName && instance.getName(entry)"
-        [featured]="instance.isFeatured(entry)"
-        [collapsed]="!expanded && !instance.isFeatured(entry)"
-        (expandClick)="expandClick.emit()"
-    >
-        <div #portal></div>
-    </vdr-timeline-entry>`,
+    template: `
+        <vdr-timeline-entry
+            [displayType]="instance.getDisplayType(entry)"
+            [iconShape]="instance.getIconShape && instance.getIconShape(entry)"
+            [createdAt]="entry.createdAt"
+            [name]="instance.getName && instance.getName(entry)"
+            [featured]="instance.isFeatured(entry)"
+            [collapsed]="!expanded && !instance.isFeatured(entry)"
+            (expandClick)="expandClick.emit()"
+        >
+            <div #portal></div>
+        </vdr-timeline-entry>
+    `,
     exportAs: 'historyEntry',
+    standalone: false,
 })
 export class CustomerHistoryEntryHostComponent implements OnInit, OnDestroy {
     @Input() entry: TimelineHistoryEntry;
@@ -42,18 +44,14 @@ export class CustomerHistoryEntryHostComponent implements OnInit, OnDestroy {
     instance: CustomerHistoryEntryComponent;
     private componentRef: ComponentRef<CustomerHistoryEntryComponent>;
 
-    constructor(
-        private componentFactoryResolver: ComponentFactoryResolver,
-        private historyEntryComponentService: HistoryEntryComponentService,
-    ) {}
+    constructor(private historyEntryComponentService: HistoryEntryComponentService) {}
 
     ngOnInit(): void {
         const componentType = this.historyEntryComponentService.getComponent(
             this.entry.type,
         ) as Type<CustomerHistoryEntryComponent>;
 
-        const factory = this.componentFactoryResolver.resolveComponentFactory(componentType);
-        const componentRef = this.portalRef.createComponent(factory);
+        const componentRef = this.portalRef.createComponent(componentType);
         componentRef.instance.entry = this.entry;
         componentRef.instance.customer = this.customer;
         this.instance = componentRef.instance;

@@ -1,6 +1,5 @@
+import { ApolloServerPlugin, GraphQLRequestListener, GraphQLRequestContext } from '@apollo/server';
 import { InternalServerError, Logger } from '@vendure/core';
-import { ApolloServerPlugin, GraphQLRequestListener } from 'apollo-server-plugin-base';
-import { GraphQLRequestContext } from 'apollo-server-types';
 import {
     getNamedType,
     getNullableType,
@@ -21,14 +20,18 @@ import { HardenPluginOptions } from '../types';
 export class QueryComplexityPlugin implements ApolloServerPlugin {
     constructor(private options: HardenPluginOptions) {}
 
-    requestDidStart({ schema }: GraphQLRequestContext): GraphQLRequestListener {
+    async requestDidStart(context: GraphQLRequestContext<any>): Promise<GraphQLRequestListener<any>> {
         const maxQueryComplexity = this.options.maxQueryComplexity ?? 1000;
         return {
             didResolveOperation: async ({ request, document }) => {
-                if (isAdminApi(schema)) {
+                if (isAdminApi(context.schema)) {
                     // We don't want to apply the cost analysis on the
                     // Admin API, since any expensive operations would require
                     // an authenticated session.
+                    return;
+                }
+                if (await this.options.skip?.(context)) {
+                    // Given skip function tells use we should not check this request for complexity
                     return;
                 }
                 const query = request.operationName
@@ -42,7 +45,7 @@ export class QueryComplexityPlugin implements ApolloServerPlugin {
                     );
                 }
                 const complexity = getComplexity({
-                    schema,
+                    schema: context.schema,
                     query,
                     variables: request.variables,
                     estimators: this.options.queryComplexityEstimators ?? [
@@ -67,7 +70,7 @@ export class QueryComplexityPlugin implements ApolloServerPlugin {
                         }" is ${complexity}, which exceeds the maximum of ${maxQueryComplexity}`,
                         loggerCtx,
                     );
-                    throw new InternalServerError(`Query is too complex`);
+                    throw new InternalServerError('Query is too complex');
                 }
             },
         };
@@ -90,7 +93,7 @@ function isAdminApi(schema: GraphQLSchema): boolean {
  * When selecting PaginatedList types, the "take" argument is used to estimate a complexity
  * factor. If the "take" argument is omitted, a default factor of 1000 is applied.
  *
- * @docsCategory HardenPlugin
+ * @docsCategory core plugins/HardenPlugin
  */
 export function defaultVendureComplexityEstimator(
     customComplexityFactors: { [path: string]: number },

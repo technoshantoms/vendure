@@ -4,7 +4,7 @@ import { RequestContext } from '../../api/common/request-context';
 
 import { ShippingCalculator } from './shipping-calculator';
 
-enum TaxSetting {
+export enum TaxSetting {
     include = 'include',
     exclude = 'exclude',
     auto = 'auto',
@@ -43,9 +43,9 @@ export const defaultShippingCalculator = new ShippingCalculator({
             label: [{ languageCode: LanguageCode.en, value: 'Price includes tax' }],
         },
         taxRate: {
-            type: 'int',
+            type: 'float',
             defaultValue: 0,
-            ui: { component: 'number-form-input', suffix: '%' },
+            ui: { component: 'number-form-input', suffix: '%', min: 0 },
             label: [{ languageCode: LanguageCode.en, value: 'Tax rate' }],
         },
     },

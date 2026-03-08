@@ -1,7 +1,7 @@
-import { Asset } from '@vendure/common/lib/generated-types';
-import { ApolloServerPlugin, GraphQLRequestListener, GraphQLServiceContext } from 'apollo-server-plugin-base';
+import { ApolloServerPlugin, GraphQLRequestListener, GraphQLServerContext } from '@apollo/server';
 import { DocumentNode, GraphQLNamedType, isUnionType } from 'graphql';
 
+import { Instrument } from '../../common/instrument-decorator';
 import { AssetStorageStrategy } from '../../config/asset-storage-strategy/asset-storage-strategy';
 import { ConfigService } from '../../config/config.service';
 import { GraphqlValueTransformer } from '../common/graphql-value-transformer';
@@ -10,6 +10,7 @@ import { GraphqlValueTransformer } from '../common/graphql-value-transformer';
  * Transforms outputs so that any Asset instances are run through the {@link AssetStorageStrategy.toAbsoluteUrl}
  * method before being returned in the response.
  */
+@Instrument()
 export class AssetInterceptorPlugin implements ApolloServerPlugin {
     private graphqlValueTransformer: GraphqlValueTransformer;
     private readonly toAbsoluteUrl: AssetStorageStrategy['toAbsoluteUrl'] | undefined;
@@ -23,29 +24,29 @@ export class AssetInterceptorPlugin implements ApolloServerPlugin {
         }
     }
 
-    serverWillStart(service: GraphQLServiceContext): Promise<void> | void {
+    async serverWillStart(service: GraphQLServerContext): Promise<void> {
         this.graphqlValueTransformer = new GraphqlValueTransformer(service.schema);
     }
 
-    requestDidStart(): GraphQLRequestListener {
+    async requestDidStart(): Promise<GraphQLRequestListener<any>> {
         return {
-            willSendResponse: requestContext => {
+            willSendResponse: async requestContext => {
                 const { document } = requestContext;
                 if (document) {
-                    const data = requestContext.response.data;
-                    const req = requestContext.context.req;
-                    if (data) {
-                        this.prefixAssetUrls(req, document, data);
+                    const { body } = requestContext.response;
+                    const req = requestContext.contextValue.req;
+                    if (body.kind === 'single') {
+                        this.prefixAssetUrls(req, document, body.singleResult.data);
                     }
                 }
             },
         };
     }
 
-    private prefixAssetUrls(request: any, document: DocumentNode, data: Record<string, any>) {
+    private prefixAssetUrls(request: any, document: DocumentNode, data?: Record<string, unknown> | null) {
         const typeTree = this.graphqlValueTransformer.getOutputTypeTree(document);
         const toAbsoluteUrl = this.toAbsoluteUrl;
-        if (!toAbsoluteUrl) {
+        if (!toAbsoluteUrl || !data) {
             return;
         }
         this.graphqlValueTransformer.transformValues(typeTree, data, (value, type) => {

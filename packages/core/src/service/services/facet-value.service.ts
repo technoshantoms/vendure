@@ -10,13 +10,14 @@ import {
 import { ID, PaginatedList } from '@vendure/common/lib/shared-types';
 
 import { RequestContext } from '../../api/common/request-context';
-import { RelationPaths } from '../../api/index';
-import { ListQueryOptions } from '../../common/index';
+import { RelationPaths } from '../../api/decorators/relations.decorator';
+import { Instrument } from '../../common/instrument-decorator';
+import { ListQueryOptions } from '../../common/types/common-types';
 import { Translated } from '../../common/types/locale-types';
 import { assertFound } from '../../common/utils';
 import { ConfigService } from '../../config/config.service';
 import { TransactionalConnection } from '../../connection/transactional-connection';
-import { Asset, Product, ProductVariant } from '../../entity';
+import { Product, ProductVariant } from '../../entity';
 import { FacetValueTranslation } from '../../entity/facet-value/facet-value-translation.entity';
 import { FacetValue } from '../../entity/facet-value/facet-value.entity';
 import { Facet } from '../../entity/facet/facet.entity';
@@ -37,6 +38,7 @@ import { ChannelService } from './channel.service';
  * @docsCategory services
  */
 @Injectable()
+@Instrument()
 export class FacetValueService {
     constructor(
         private connection: TransactionalConnection,
@@ -58,18 +60,30 @@ export class FacetValueService {
         ctxOrLang: RequestContext | LanguageCode,
         lang?: LanguageCode,
     ): Promise<Array<Translated<FacetValue>>> {
-        const [repository, languageCode] =
+        const [repository, languageCode, channelLanguageCode] =
             ctxOrLang instanceof RequestContext
-                ? // tslint:disable-next-line:no-non-null-assertion
-                  [this.connection.getRepository(ctxOrLang, FacetValue), lang!]
-                : [this.connection.rawConnection.getRepository(FacetValue), ctxOrLang];
-        // ToDo Implement usage of channelLanguageCode
+                ? [
+                      this.connection.getRepository(ctxOrLang, FacetValue),
+                      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+                      lang!,
+                      ctxOrLang.channel.defaultLanguageCode,
+                  ]
+                : [this.connection.rawConnection.getRepository(FacetValue), ctxOrLang, undefined];
+        const globalDefaultLanguageCode = this.configService.defaultLanguageCode;
         return repository
             .find({
                 relations: ['facet'],
             })
             .then(facetValues =>
-                facetValues.map(facetValue => translateDeep(facetValue, languageCode, ['facet'])),
+                facetValues.map(facetValue =>
+                    translateDeep(
+                        facetValue,
+                        channelLanguageCode
+                            ? [languageCode, channelLanguageCode, globalDefaultLanguageCode]
+                            : [languageCode, globalDefaultLanguageCode],
+                        ['facet'],
+                    ),
+                ),
             );
     }
 
@@ -87,6 +101,7 @@ export class FacetValueService {
     ): Promise<PaginatedList<Translated<FacetValue>>> {
         return this.listQueryBuilder
             .build(FacetValue, options, {
+                ctx,
                 relations: relations ?? ['facet'],
                 channelId: ctx.channelId,
             })
@@ -102,10 +117,14 @@ export class FacetValueService {
     findOne(ctx: RequestContext, id: ID): Promise<Translated<FacetValue> | undefined> {
         return this.connection
             .getRepository(ctx, FacetValue)
-            .findOne(id, {
+            .findOne({
+                where: { id },
                 relations: ['facet'],
             })
-            .then(facetValue => facetValue && this.translator.translate(facetValue, ctx, ['facet']));
+            .then(
+                facetValue =>
+                    (facetValue && this.translator.translate(facetValue, ctx, ['facet'])) ?? undefined,
+            );
     }
 
     findByIds(ctx: RequestContext, ids: ID[]): Promise<Array<Translated<FacetValue>>> {
@@ -132,6 +151,33 @@ export class FacetValueService {
             .then(values => values.map(facetValue => this.translator.translate(facetValue, ctx)));
     }
 
+    /**
+     * @description
+     * Returns all FacetValues belonging to the Facet with the given id.
+     */
+    findByFacetIdList(
+        ctx: RequestContext,
+        id: ID,
+        options?: ListQueryOptions<FacetValue>,
+        relations?: RelationPaths<FacetValue>,
+    ): Promise<PaginatedList<Translated<FacetValue>>> {
+        return this.listQueryBuilder
+            .build(FacetValue, options, {
+                ctx,
+                relations: relations ?? ['facet'],
+                channelId: ctx.channelId,
+                entityAlias: 'facetValue',
+            })
+            .andWhere('facetValue.facetId = :id', { id })
+            .getManyAndCount()
+            .then(([items, totalItems]) => {
+                return {
+                    items: items.map(item => this.translator.translate(item, ctx, ['facet'])),
+                    totalItems,
+                };
+            });
+    }
+
     async create(
         ctx: RequestContext,
         facet: Facet,
@@ -153,7 +199,7 @@ export class FacetValueService {
             input as CreateFacetValueInput,
             facetValue,
         );
-        this.eventBus.publish(new FacetValueEvent(ctx, facetValueWithRelations, 'created', input));
+        await this.eventBus.publish(new FacetValueEvent(ctx, facetValueWithRelations, 'created', input));
         return assertFound(this.findOne(ctx, facetValue.id));
     }
 
@@ -165,7 +211,7 @@ export class FacetValueService {
             translationType: FacetValueTranslation,
         });
         await this.customFieldRelationService.updateRelations(ctx, FacetValue, input, facetValue);
-        this.eventBus.publish(new FacetValueEvent(ctx, facetValue, 'updated', input));
+        await this.eventBus.publish(new FacetValueEvent(ctx, facetValue, 'updated', input));
         return assertFound(this.findOne(ctx, facetValue.id));
     }
 
@@ -190,11 +236,11 @@ export class FacetValueService {
 
         if (!isInUse) {
             await this.connection.getRepository(ctx, FacetValue).remove(facetValue);
-            this.eventBus.publish(new FacetValueEvent(ctx, deletedFacetValue, 'deleted', id));
+            await this.eventBus.publish(new FacetValueEvent(ctx, deletedFacetValue, 'deleted', id));
             result = DeletionResult.DELETED;
         } else if (force) {
             await this.connection.getRepository(ctx, FacetValue).remove(facetValue);
-            this.eventBus.publish(new FacetValueEvent(ctx, deletedFacetValue, 'deleted', id));
+            await this.eventBus.publish(new FacetValueEvent(ctx, deletedFacetValue, 'deleted', id));
             message = ctx.translate('message.facet-value-force-deleted', i18nVars);
             result = DeletionResult.DELETED;
         } else {

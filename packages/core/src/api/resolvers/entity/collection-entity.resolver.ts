@@ -5,11 +5,13 @@ import {
     ConfigurableOperation,
     ProductVariantListOptions,
 } from '@vendure/common/lib/generated-types';
-import { PaginatedList } from '@vendure/common/lib/shared-types';
+import { ID, PaginatedList } from '@vendure/common/lib/shared-types';
 
+import { RequestContextCacheService } from '../../../cache/request-context-cache.service';
+import { CacheKey } from '../../../common/constants';
 import { ListQueryOptions } from '../../../common/types/common-types';
 import { Translated } from '../../../common/types/locale-types';
-import { CollectionFilter } from '../../../config/index';
+import { CollectionFilter } from '../../../config/catalog/collection-filter';
 import { Asset, Collection, Product, ProductVariant } from '../../../entity';
 import { LocaleStringHydrator } from '../../../service/helpers/locale-string-hydrator/locale-string-hydrator';
 import { AssetService } from '../../../service/services/asset.service';
@@ -30,6 +32,7 @@ export class CollectionEntityResolver {
         private assetService: AssetService,
         private localeStringHydrator: LocaleStringHydrator,
         private configurableOperationCodec: ConfigurableOperationCodec,
+        private requestContextCache: RequestContextCacheService,
     ) {}
 
     @ResolveField()
@@ -74,11 +77,26 @@ export class CollectionEntityResolver {
     }
 
     @ResolveField()
+    async productVariantCount(@Ctx() ctx: RequestContext, @Parent() collection: Collection): Promise<number> {
+        const cachedCountsPromise = this.requestContextCache.get<Promise<Map<ID, number>>>(
+            ctx,
+            CacheKey.CollectionVariantCounts,
+        );
+        if (cachedCountsPromise) {
+            const countsMap = await cachedCountsPromise;
+            return countsMap.get(String(collection.id)) ?? 0;
+        }
+        // Fallback to single query if cache not available (e.g., single collection query)
+        const singleCountMap = await this.collectionService.getProductVariantCounts(ctx, [collection.id]);
+        return singleCountMap.get(String(collection.id)) ?? 0;
+    }
+
+    @ResolveField()
     async breadcrumbs(
         @Ctx() ctx: RequestContext,
         @Parent() collection: Collection,
     ): Promise<CollectionBreadcrumb[]> {
-        return this.collectionService.getBreadcrumbs(ctx, collection) as any;
+        return this.collectionService.getBreadcrumbs(ctx, collection);
     }
 
     @ResolveField()
@@ -116,7 +134,7 @@ export class CollectionEntityResolver {
         @Ctx() ctx: RequestContext,
         @Parent() collection: Collection,
     ): Promise<Asset | undefined> {
-        if (collection.featuredAsset) {
+        if (collection.featuredAsset !== undefined) {
             return collection.featuredAsset;
         }
         return this.assetService.getFeaturedAsset(ctx, collection);
@@ -136,7 +154,9 @@ export class CollectionEntityResolver {
             );
         } catch (e: any) {
             Logger.error(
-                `Could not decode the collection filter arguments for "${collection.name}" (id: ${collection.id}). Error message: ${e.message}`,
+                `Could not decode the collection filter arguments for "${collection.name}" (id: ${
+                    collection.id
+                }). Error message: ${JSON.stringify(e.message)}`,
             );
             return [];
         }

@@ -3,20 +3,22 @@ import { ConfigService } from '@vendure/core';
 import { createTestEnvironment } from '@vendure/testing';
 import gql from 'graphql-tag';
 import path from 'path';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { initialData } from '../../../e2e-common/e2e-initial-data';
-import { testConfig, TEST_SETUP_TIMEOUT_MS } from '../../../e2e-common/test-config';
+import { TEST_SETUP_TIMEOUT_MS, testConfig } from '../../../e2e-common/test-config';
 
 import { TestPluginWithAllLifecycleHooks } from './fixtures/test-plugins/with-all-lifecycle-hooks';
 import { TestAPIExtensionPlugin } from './fixtures/test-plugins/with-api-extensions';
 import { TestPluginWithConfig } from './fixtures/test-plugins/with-config';
 import { PluginWithGlobalProviders } from './fixtures/test-plugins/with-global-providers';
 import { TestLazyExtensionPlugin } from './fixtures/test-plugins/with-lazy-api-extensions';
+import { WithNewConfigObjectReferencePlugin } from './fixtures/test-plugins/with-new-config-object-reference';
 import { TestPluginWithProvider } from './fixtures/test-plugins/with-provider';
 import { TestRestPlugin } from './fixtures/test-plugins/with-rest-controller';
 
 describe('Plugins', () => {
-    const onConstructorFn = jest.fn();
+    const onConstructorFn = vi.fn();
     const activeConfig = testConfig();
     const { server, adminClient, shopClient } = createTestEnvironment({
         ...activeConfig,
@@ -28,6 +30,7 @@ describe('Plugins', () => {
             TestLazyExtensionPlugin,
             TestRestPlugin,
             PluginWithGlobalProviders,
+            WithNewConfigObjectReferencePlugin,
         ],
     });
 
@@ -48,6 +51,17 @@ describe('Plugins', () => {
         const configService = server.app.get(ConfigService);
         expect(configService instanceof ConfigService).toBe(true);
         expect(configService.defaultLanguageCode).toBe(LanguageCode.zh);
+    });
+
+    // https://github.com/vendurehq/vendure/issues/2906
+    it('handles plugins that return new config object references', async () => {
+        const configService = server.app.get(ConfigService);
+        expect(configService.customFields.Customer).toEqual([
+            {
+                name: 'testField',
+                type: 'string',
+            },
+        ]);
     });
 
     it('extends the admin API', async () => {

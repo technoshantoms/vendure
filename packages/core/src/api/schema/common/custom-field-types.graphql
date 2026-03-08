@@ -7,6 +7,9 @@ interface CustomField {
     readonly: Boolean
     internal: Boolean
     nullable: Boolean
+    requiresPermission: [Permission!]
+    deprecated: Boolean
+    deprecationReason: String
     ui: JSON
 }
 
@@ -20,6 +23,9 @@ type StringCustomFieldConfig implements CustomField {
     readonly: Boolean
     internal: Boolean
     nullable: Boolean
+    requiresPermission: [Permission!]
+    deprecated: Boolean
+    deprecationReason: String
     pattern: String
     options: [StringFieldOption!]
     ui: JSON
@@ -40,6 +46,9 @@ type LocaleStringCustomFieldConfig implements CustomField {
     readonly: Boolean
     internal: Boolean
     nullable: Boolean
+    requiresPermission: [Permission!]
+    deprecated: Boolean
+    deprecationReason: String
     pattern: String
     ui: JSON
 }
@@ -52,6 +61,9 @@ type IntCustomFieldConfig implements CustomField {
     readonly: Boolean
     internal: Boolean
     nullable: Boolean
+    requiresPermission: [Permission!]
+    deprecated: Boolean
+    deprecationReason: String
     min: Int
     max: Int
     step: Int
@@ -66,6 +78,9 @@ type FloatCustomFieldConfig implements CustomField {
     readonly: Boolean
     internal: Boolean
     nullable: Boolean
+    requiresPermission: [Permission!]
+    deprecated: Boolean
+    deprecationReason: String
     min: Float
     max: Float
     step: Float
@@ -80,6 +95,9 @@ type BooleanCustomFieldConfig implements CustomField {
     readonly: Boolean
     internal: Boolean
     nullable: Boolean
+    requiresPermission: [Permission!]
+    deprecated: Boolean
+    deprecationReason: String
     ui: JSON
 }
 """
@@ -95,6 +113,9 @@ type DateTimeCustomFieldConfig implements CustomField {
     readonly: Boolean
     internal: Boolean
     nullable: Boolean
+    requiresPermission: [Permission!]
+    deprecated: Boolean
+    deprecationReason: String
     min: String
     max: String
     step: Int
@@ -110,6 +131,9 @@ type RelationCustomFieldConfig implements CustomField {
     readonly: Boolean
     internal: Boolean
     nullable: Boolean
+    requiresPermission: [Permission!]
+    deprecated: Boolean
+    deprecationReason: String
     entity: String!
     scalarFields: [String!]!
     ui: JSON
@@ -124,6 +148,124 @@ type TextCustomFieldConfig implements CustomField {
     readonly: Boolean
     internal: Boolean
     nullable: Boolean
+    requiresPermission: [Permission!]
+    deprecated: Boolean
+    deprecationReason: String
+    ui: JSON
+}
+
+type LocaleTextCustomFieldConfig implements CustomField {
+    name: String!
+    type: String!
+    list: Boolean!
+    label: [LocalizedString!]
+    description: [LocalizedString!]
+    readonly: Boolean
+    internal: Boolean
+    nullable: Boolean
+    requiresPermission: [Permission!]
+    deprecated: Boolean
+    deprecationReason: String
+    ui: JSON
+}
+
+interface StructField {
+    name: String!
+    type: String!
+    list: Boolean
+    label: [LocalizedString!]
+    description: [LocalizedString!]
+    ui: JSON
+}
+
+type StringStructFieldConfig implements StructField {
+    name: String!
+    type: String!
+    list: Boolean!
+    label: [LocalizedString!]
+    description: [LocalizedString!]
+    length: Int
+    pattern: String
+    options: [StringFieldOption!]
+    ui: JSON
+}
+
+type IntStructFieldConfig implements StructField {
+    name: String!
+    type: String!
+    list: Boolean!
+    label: [LocalizedString!]
+    description: [LocalizedString!]
+    min: Int
+    max: Int
+    step: Int
+    ui: JSON
+}
+type FloatStructFieldConfig implements StructField {
+    name: String!
+    type: String!
+    list: Boolean!
+    label: [LocalizedString!]
+    description: [LocalizedString!]
+    min: Float
+    max: Float
+    step: Float
+    ui: JSON
+}
+type BooleanStructFieldConfig implements StructField {
+    name: String!
+    type: String!
+    list: Boolean!
+    label: [LocalizedString!]
+    description: [LocalizedString!]
+    ui: JSON
+}
+"""
+Expects the same validation formats as the `<input type="datetime-local">` HTML element.
+See https://developer.mozilla.org/en-US/docs/Web/HTML/Element/input/datetime-local#Additional_attributes
+"""
+type DateTimeStructFieldConfig implements StructField {
+    name: String!
+    type: String!
+    list: Boolean!
+    label: [LocalizedString!]
+    description: [LocalizedString!]
+    min: String
+    max: String
+    step: Int
+    ui: JSON
+}
+
+type TextStructFieldConfig implements StructField {
+    name: String!
+    type: String!
+    list: Boolean!
+    label: [LocalizedString!]
+    description: [LocalizedString!]
+    ui: JSON
+}
+
+union StructFieldConfig =
+    StringStructFieldConfig
+    | IntStructFieldConfig
+    | FloatStructFieldConfig
+    | BooleanStructFieldConfig
+    | DateTimeStructFieldConfig
+    | TextStructFieldConfig
+
+type StructCustomFieldConfig implements CustomField {
+    name: String!
+    type: String!
+    list: Boolean!
+    fields: [StructFieldConfig!]!
+    label: [LocalizedString!]
+    description: [LocalizedString!]
+    readonly: Boolean
+    internal: Boolean
+    nullable: Boolean
+    requiresPermission: [Permission!]
+    deprecated: Boolean
+    deprecationReason: String
     ui: JSON
 }
 
@@ -141,3 +283,5 @@ union CustomFieldConfig =
     | DateTimeCustomFieldConfig
     | RelationCustomFieldConfig
     | TextCustomFieldConfig
+    | LocaleTextCustomFieldConfig
+    | StructCustomFieldConfig

@@ -34,18 +34,18 @@ export class BraintreeResolver {
     ) {
         if (orderId) {
             Logger.warn(
-                `The orderId argument to the generateBraintreeClientToken mutation has been deprecated and may be omitted.`,
+                'The orderId argument to the generateBraintreeClientToken mutation has been deprecated and may be omitted.',
             );
         }
         const sessionOrder = await this.activeOrderService.getOrderFromContext(ctx);
         if (!sessionOrder) {
             throw new InternalServerError(
-                `Cannot generate Braintree clientToken as there is no active Order.`,
+                'Cannot generate Braintree clientToken as there is no active Order.',
             );
         }
         const order = await this.orderService.findOne(ctx, sessionOrder.id);
-        if (order && order.customer) {
-            const customerId = order.customer.customFields.braintreeCustomerId ?? undefined;
+        if (order) {
+            const customerId = order.customer?.customFields.braintreeCustomerId ?? undefined;
             const args = await this.getPaymentMethodArgs(ctx);
             const gateway = getGateway(args, this.options);
             try {
@@ -60,8 +60,10 @@ export class BraintreeResolver {
                         // we switched to Production. In this case, we will remove it and allow a new one
                         // to be generated when the payment is created.
                         if (this.options.storeCustomersInBraintree) {
-                            order.customer.customFields.braintreeCustomerId = undefined;
-                            await this.connection.getRepository(ctx, Customer).save(order.customer);
+                            if (order.customer?.customFields.braintreeCustomerId) {
+                                order.customer.customFields.braintreeCustomerId = undefined;
+                                await this.connection.getRepository(ctx, Customer).save(order.customer);
+                            }
                         }
                         result = await gateway.clientToken.generate({ customerId: undefined });
                         if (result.success === true) {
@@ -73,9 +75,9 @@ export class BraintreeResolver {
                         `Could not generate Braintree clientToken: ${result.message}`,
                     );
                 }
-            } catch (e) {
+            } catch (e: any) {
                 Logger.error(
-                    `Could not generate Braintree clientToken. Check the configured credentials.`,
+                    'Could not generate Braintree clientToken. Check the configured credentials.',
                     loggerCtx,
                 );
                 throw e;

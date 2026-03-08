@@ -1,6 +1,6 @@
-<h4>{{ 'customer.customer-history' | translate }}</h4>
 <div class="entry-list">
-    <vdr-timeline-entry iconShape="note" displayType="muted" *vdrIfPermissions="'UpdateCustomer'">
+    <vdr-timeline-entry iconShape="note" displayType="muted" [featured]="true" *vdrIfPermissions="'UpdateCustomer'"
+                        [isFirst]="true">
         <div class="note-entry">
             <textarea [(ngModel)]="note" name="note" class="note"></textarea>
             <button class="btn btn-secondary" [disabled]="!note" (click)="addNoteToCustomer()">
@@ -106,11 +106,13 @@
                             {{ 'customer.history-customer-email-update-requested' | translate }}
                             <vdr-history-entry-detail>
                                 <vdr-labeled-data [label]="'customer.old-email-address' | translate">{{
-                                    entry.data.oldEmailAddress
-                                }}</vdr-labeled-data>
+                                        entry.data.oldEmailAddress
+                                    }}
+                                </vdr-labeled-data>
                                 <vdr-labeled-data [label]="'customer.new-email-address' | translate">{{
-                                    entry.data.newEmailAddress
-                                }}</vdr-labeled-data>
+                                        entry.data.newEmailAddress
+                                    }}
+                                </vdr-labeled-data>
                             </vdr-history-entry-detail>
                         </div>
                     </ng-container>
@@ -119,11 +121,13 @@
                             {{ 'customer.history-customer-email-update-verified' | translate }}
                             <vdr-history-entry-detail>
                                 <vdr-labeled-data [label]="'customer.old-email-address' | translate">{{
-                                    entry.data.oldEmailAddress
-                                }}</vdr-labeled-data>
+                                        entry.data.oldEmailAddress
+                                    }}
+                                </vdr-labeled-data>
                                 <vdr-labeled-data [label]="'customer.new-email-address' | translate">{{
-                                    entry.data.newEmailAddress
-                                }}</vdr-labeled-data>
+                                        entry.data.newEmailAddress
+                                    }}
+                                </vdr-labeled-data>
                             </vdr-history-entry-detail>
                         </div>
                     </ng-container>
@@ -134,12 +138,11 @@
                             </div>
                             <div class="flex-spacer"></div>
                             <vdr-dropdown>
-                                <button class="icon-button" vdrDropdownTrigger>
-                                    <clr-icon shape="ellipsis-vertical"></clr-icon>
+                                <button class="button-small ml-1" vdrDropdownTrigger>
+                                    <clr-icon shape="ellipsis-vertical" size="12"></clr-icon>
                                 </button>
                                 <vdr-dropdown-menu vdrPosition="bottom-right">
                                     <button
-                                        class="button"
                                         vdrDropdownItem
                                         (click)="updateNote.emit(entry)"
                                         [disabled]="!('UpdateCustomer' | hasPermission)"
@@ -149,7 +152,6 @@
                                     </button>
                                     <div class="dropdown-divider"></div>
                                     <button
-                                        class="button"
                                         vdrDropdownItem
                                         (click)="deleteNote.emit(entry)"
                                         [disabled]="!('UpdateCustomer' | hasPermission)"

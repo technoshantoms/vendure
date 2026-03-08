@@ -1,26 +1,22 @@
-/* tslint:disable:no-non-null-assertion */
+/* eslint-disable @typescript-eslint/no-non-null-assertion */
 import { ID } from '@vendure/common/lib/shared-types';
 import { PaymentMethodHandler } from '@vendure/core';
 import { SimpleGraphQLClient } from '@vendure/testing';
 
+import { ResultOf } from '../graphql/graphql-shop';
 import {
-    AddPaymentToOrder,
-    GetShippingMethods,
-    SetShippingAddress,
-    SetShippingMethod,
-    TestOrderFragmentFragment,
-    TransitionToState,
-} from '../graphql/generated-e2e-shop-types';
-import {
-    ADD_PAYMENT,
-    GET_ELIGIBLE_SHIPPING_METHODS,
-    SET_SHIPPING_ADDRESS,
-    SET_SHIPPING_METHOD,
-    TRANSITION_TO_STATE,
+    addPaymentDocument,
+    getEligibleShippingMethodsDocument,
+    setShippingAddressDocument,
+    setShippingMethodDocument,
+    transitionToStateDocument,
 } from '../graphql/shop-definitions';
 
-export async function proceedToArrangingPayment(shopClient: SimpleGraphQLClient): Promise<ID> {
-    await shopClient.query<SetShippingAddress.Mutation, SetShippingAddress.Variables>(SET_SHIPPING_ADDRESS, {
+export async function proceedToArrangingPayment(
+    shopClient: SimpleGraphQLClient,
+    shippingMethodIdx = 1,
+): Promise<ID> {
+    await shopClient.query(setShippingAddressDocument, {
         input: {
             fullName: 'name',
             streetLine1: '12 the street',
@@ -30,39 +26,34 @@ export async function proceedToArrangingPayment(shopClient: SimpleGraphQLClient)
         },
     });
 
-    const { eligibleShippingMethods } = await shopClient.query<GetShippingMethods.Query>(
-        GET_ELIGIBLE_SHIPPING_METHODS,
-    );
+    const { eligibleShippingMethods } = await shopClient.query(getEligibleShippingMethodsDocument);
 
-    await shopClient.query<SetShippingMethod.Mutation, SetShippingMethod.Variables>(SET_SHIPPING_METHOD, {
-        id: eligibleShippingMethods[1].id,
+    await shopClient.query(setShippingMethodDocument, {
+        id: [eligibleShippingMethods[shippingMethodIdx].id],
     });
 
-    const { transitionOrderToState } = await shopClient.query<
-        TransitionToState.Mutation,
-        TransitionToState.Variables
-    >(TRANSITION_TO_STATE, { state: 'ArrangingPayment' });
+    const { transitionOrderToState } = await shopClient.query(transitionToStateDocument, {
+        state: 'ArrangingPayment',
+    });
 
-    return (transitionOrderToState as TestOrderFragmentFragment)!.id;
+    return (transitionOrderToState as Extract<typeof transitionOrderToState, { id: string }>).id;
 }
 
 export async function addPaymentToOrder(
     shopClient: SimpleGraphQLClient,
     handler: PaymentMethodHandler,
-): Promise<NonNullable<AddPaymentToOrder.Mutation['addPaymentToOrder']>> {
-    const result = await shopClient.query<AddPaymentToOrder.Mutation, AddPaymentToOrder.Variables>(
-        ADD_PAYMENT,
-        {
-            input: {
-                method: handler.code,
-                metadata: {
-                    baz: 'quux',
-                },
+): Promise<
+    Extract<NonNullable<ResultOf<typeof addPaymentDocument>['addPaymentToOrder']>, { __typename?: 'Order' }>
+> {
+    const result = await shopClient.query(addPaymentDocument, {
+        input: {
+            method: handler.code,
+            metadata: {
+                baz: 'quux',
             },
         },
-    );
-    const order = result.addPaymentToOrder!;
-    return order as any;
+    });
+    return result.addPaymentToOrder as any;
 }
 
 /**

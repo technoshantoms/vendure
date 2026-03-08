@@ -1,6 +1,7 @@
 import { Injectable, OnModuleDestroy } from '@nestjs/common';
 import { JobQueue as GraphQlJobQueue } from '@vendure/common/lib/generated-types';
 
+import { Instrument } from '../common';
 import { ConfigService, JobQueueStrategy, Logger } from '../config';
 
 import { loggerCtx } from './constants';
@@ -16,7 +17,7 @@ import { CreateQueueOptions, JobData } from './types';
  * existing jobs.
  *
  * @example
- * ```TypeScript
+ * ```ts
  * // A service which transcodes video files
  * class VideoTranscoderService {
  *
@@ -46,15 +47,27 @@ import { CreateQueueOptions, JobData } from './types';
  * @docsCategory JobQueue
  */
 @Injectable()
+@Instrument()
 export class JobQueueService implements OnModuleDestroy {
     private queues: Array<JobQueue<any>> = [];
     private hasStarted = false;
+
+    /**
+     * @description
+     * Returns `true` if the job queues have been started.
+     */
+    get started(): boolean {
+        return this.hasStarted;
+    }
 
     private get jobQueueStrategy(): JobQueueStrategy {
         return this.configService.jobQueueOptions.jobQueueStrategy;
     }
 
-    constructor(private configService: ConfigService, private jobBufferService: JobBufferService) {}
+    constructor(
+        private configService: ConfigService,
+        private jobBufferService: JobBufferService,
+    ) {}
 
     /** @internal */
     onModuleDestroy() {
@@ -72,11 +85,15 @@ export class JobQueueService implements OnModuleDestroy {
         if (this.configService.jobQueueOptions.prefix) {
             options = { ...options, name: `${this.configService.jobQueueOptions.prefix}${options.name}` };
         }
+        const wrappedProcessFn = this.createWrappedProcessFn(options.process);
+        options = { ...options, process: wrappedProcessFn };
+
         const queue = new JobQueue(options, this.jobQueueStrategy, this.jobBufferService);
         if (this.hasStarted && this.shouldStartQueue(queue.name)) {
             await queue.start();
         }
         this.queues.push(queue);
+
         return queue;
     }
 
@@ -121,7 +138,7 @@ export class JobQueueService implements OnModuleDestroy {
      * If no argument is passed, sizes will be returned for _all_ JobBuffers.
      *
      * @example
-     * ```TypeScript
+     * ```ts
      * const sizes = await this.jobQueueService.bufferSize('buffer-1', 'buffer-2');
      *
      * // sizes = { 'buffer-1': 12, 'buffer-2': 3 }
@@ -162,6 +179,28 @@ export class JobQueueService implements OnModuleDestroy {
             name: queue.name,
             running: queue.started,
         }));
+    }
+
+    /**
+     * We wrap the process function in order to catch any errors thrown and pass them to
+     * any configured ErrorHandlerStrategies.
+     */
+    private createWrappedProcessFn<Data extends JobData<Data>>(
+        processFn: (job: Job<Data>) => Promise<any>,
+    ): (job: Job<Data>) => Promise<any> {
+        const { errorHandlers } = this.configService.systemOptions;
+        return async (job: Job<Data>) => {
+            try {
+                return await processFn(job);
+            } catch (e) {
+                for (const handler of errorHandlers) {
+                    if (e instanceof Error) {
+                        void handler.handleWorkerError(e, { job });
+                    }
+                }
+                throw e;
+            }
+        };
     }
 
     private shouldStartQueue(queueName: string): boolean {

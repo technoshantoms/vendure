@@ -53,14 +53,14 @@ export type PermissionMetadata = Required<PermissionDefinitionConfig>;
  * **Note:** To define CRUD permissions, use the {@link CrudPermissionDefinition}.
  *
  * @example
- * ```TypeScript
+ * ```ts
  * export const sync = new PermissionDefinition({
  *   name: 'SyncInventory',
  *   description: 'Allows syncing stock levels via Admin API'
  * });
  * ```
  *
- * ```TypeScript
+ * ```ts
  * const config: VendureConfig = {
  *   authOptions: {
  *     customPermissions: [sync],
@@ -68,7 +68,7 @@ export type PermissionMetadata = Required<PermissionDefinitionConfig>;
  * }
  * ```
  *
- * ```TypeScript
+ * ```ts
  * \@Resolver()
  * export class ExternalSyncResolver {
  *
@@ -115,11 +115,11 @@ export class PermissionDefinition {
  * 4 Permissions: 'CreateWishlist', 'ReadWishlist', 'UpdateWishlist' & 'DeleteWishlist'.
  *
  * @example
- * ```TypeScript
+ * ```ts
  * export const wishlist = new CrudPermissionDefinition('Wishlist');
  * ```
  *
- * ```TypeScript
+ * ```ts
  * const config: VendureConfig = {
  *   authOptions: {
  *     customPermissions: [wishlist],
@@ -127,7 +127,7 @@ export class PermissionDefinition {
  * }
  * ```
  *
- * ```TypeScript
+ * ```ts
  * \@Resolver()
  * export class WishlistResolver {
  *
@@ -198,5 +198,86 @@ export class CrudPermissionDefinition extends PermissionDefinition {
      */
     get Delete(): Permission {
         return `Delete${this.config.name}` as Permission;
+    }
+}
+
+/**
+ * @description
+ * Defines a set of Read-Write Permissions for the given name, i.e. a `name` of 'DashboardSavedViews' will create
+ * 2 Permissions: 'ReadDashboardSavedViews' and 'WriteDashboardSavedViews'.
+ *
+ * @example
+ * ```ts
+ * export const dashboardSavedViews = new RwPermissionDefinition('DashboardSavedViews');
+ * ```
+ *
+ * ```ts
+ * const config: VendureConfig = {
+ *   authOptions: {
+ *     customPermissions: [dashboardSavedViews],
+ *   },
+ * }
+ * ```
+ *
+ * ```ts
+ * \@Resolver()
+ * export class DashboardResolver {
+ *
+ *   \@Allow(dashboardSavedViews.Read)
+ *   \@Query()
+ *   getDashboardSavedViews() {
+ *     // ...
+ *   }
+ *
+ *   \@Allow(dashboardSavedViews.Write)
+ *   \@Mutation()
+ *   saveDashboardView() {
+ *     // ...
+ *   }
+ * }
+ * ```
+ *
+ * @docsCategory auth
+ * @docsPage PermissionDefinition
+ * @docsWeight 2
+ * @since 3.5.0
+ */
+export class RwPermissionDefinition extends PermissionDefinition {
+    constructor(
+        name: string,
+        private descriptionFn?: (operation: 'read' | 'write') => string,
+    ) {
+        super({ name });
+    }
+
+    /** @internal */
+    getMetadata(): PermissionMetadata[] {
+        return ['Read', 'Write'].map(operation => ({
+            name: `${operation}${this.config.name}`,
+            description:
+                typeof this.descriptionFn === 'function'
+                    ? this.descriptionFn(operation.toLocaleLowerCase() as any)
+                    : `Grants permission to ${operation.toLocaleLowerCase()} ${this.config.name}`,
+            assignable: true,
+            internal: false,
+        }));
+    }
+
+    /**
+     * @description
+     * Returns the 'Read' permission defined by this definition, for use in the
+     * {@link Allow} decorator.
+     */
+    get Read(): Permission {
+        return `Read${this.config.name}` as Permission;
+    }
+
+    /**
+     * @description
+     * Returns the 'Write' permission defined by this definition, for use in the
+     * {@link Allow} decorator.
+     */
+    get Write(): Permission {
+        return `Write${this.config.name}` as Permission;
     }
 }

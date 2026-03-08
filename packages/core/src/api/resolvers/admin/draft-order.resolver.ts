@@ -17,18 +17,23 @@ import {
     MutationRemoveDraftOrderLineArgs,
     MutationSetCustomerForDraftOrderArgs,
     MutationSetDraftOrderBillingAddressArgs,
+    MutationSetDraftOrderCustomFieldsArgs,
     MutationSetDraftOrderShippingAddressArgs,
     MutationSetDraftOrderShippingMethodArgs,
+    MutationUnsetDraftOrderBillingAddressArgs,
+    MutationUnsetDraftOrderShippingAddressArgs,
     Permission,
     QueryEligibleShippingMethodsForDraftOrderArgs,
-    SetCustomerForDraftOrderResult,
     ShippingMethodQuote,
 } from '@vendure/common/lib/generated-types';
 
-import { ErrorResultUnion, isGraphQlErrorResult, UserInputError } from '../../../common/index';
+import { ErrorResultUnion, isGraphQlErrorResult } from '../../../common/error/error-result';
+import { UserInputError } from '../../../common/error/errors';
 import { TransactionalConnection } from '../../../connection/index';
-import { Customer, Order } from '../../../entity/index';
-import { CustomerService, OrderService } from '../../../service/index';
+import { Customer } from '../../../entity/customer/customer.entity';
+import { Order } from '../../../entity/order/order.entity';
+import { CustomerService } from '../../../service/services/customer.service';
+import { OrderService } from '../../../service/services/order.service';
 import { RequestContext } from '../../common/request-context';
 import { Allow } from '../../decorators/allow.decorator';
 import { Ctx } from '../../decorators/request-context.decorator';
@@ -124,10 +129,20 @@ export class DraftOrderResolver {
     @Transaction()
     @Mutation()
     @Allow(Permission.CreateOrder)
+    async setDraftOrderCustomFields(
+        @Ctx() ctx: RequestContext,
+        @Args() args: MutationSetDraftOrderCustomFieldsArgs,
+    ): Promise<ErrorResultUnion<RemoveOrderItemsResult, Order>> {
+        return this.orderService.updateCustomFields(ctx, args.orderId, args.input.customFields ?? {});
+    }
+
+    @Transaction()
+    @Mutation()
+    @Allow(Permission.CreateOrder)
     async setCustomerForDraftOrder(
         @Ctx() ctx: RequestContext,
         @Args() args: MutationSetCustomerForDraftOrderArgs,
-    ): Promise<ErrorResultUnion<SetCustomerForDraftOrderResult, Order>> {
+    ): Promise<ErrorResultUnion</* SetCustomerForDraftOrderResult*/ any, Order>> {
         let customer: Customer;
         if (args.customerId) {
             const result = await this.customerService.findOne(ctx, args.customerId);
@@ -140,12 +155,12 @@ export class DraftOrderResolver {
         } else if (args.input) {
             const result = await this.customerService.createOrUpdate(ctx, args.input, true);
             if (isGraphQlErrorResult(result)) {
-                return result;
+                return result as any;
             }
             customer = result;
         } else {
             throw new UserInputError(
-                `Either "customerId" or "input" must be supplied to setCustomerForDraftOrder`,
+                'Either "customerId" or "input" must be supplied to setCustomerForDraftOrder',
             );
         }
 
@@ -170,6 +185,26 @@ export class DraftOrderResolver {
         @Args() args: MutationSetDraftOrderBillingAddressArgs,
     ): Promise<ErrorResultUnion<ActiveOrderResult, Order>> {
         return this.orderService.setBillingAddress(ctx, args.orderId, args.input);
+    }
+
+    @Transaction()
+    @Mutation()
+    @Allow(Permission.CreateOrder)
+    async unsetDraftOrderShippingAddress(
+        @Ctx() ctx: RequestContext,
+        @Args() args: MutationUnsetDraftOrderShippingAddressArgs,
+    ): Promise<ErrorResultUnion<ActiveOrderResult, Order>> {
+        return this.orderService.unsetShippingAddress(ctx, args.orderId);
+    }
+
+    @Transaction()
+    @Mutation()
+    @Allow(Permission.CreateOrder)
+    async unsetDraftOrderBillingAddress(
+        @Ctx() ctx: RequestContext,
+        @Args() args: MutationUnsetDraftOrderBillingAddressArgs,
+    ): Promise<ErrorResultUnion<ActiveOrderResult, Order>> {
+        return this.orderService.unsetBillingAddress(ctx, args.orderId);
     }
 
     @Transaction()
@@ -208,6 +243,6 @@ export class DraftOrderResolver {
         @Ctx() ctx: RequestContext,
         @Args() args: MutationSetDraftOrderShippingMethodArgs,
     ): Promise<ErrorResultUnion<SetOrderShippingMethodResult, Order>> {
-        return this.orderService.setShippingMethod(ctx, args.orderId, args.shippingMethodId);
+        return this.orderService.setShippingMethod(ctx, args.orderId, [args.shippingMethodId]);
     }
 }

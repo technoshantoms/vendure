@@ -28,19 +28,19 @@ export class DashboardWidgetService {
         this.registry.set(id, config);
     }
 
-    getAvailableIds(currentUserPermissions: Permission[]): string[] {
-        const hasAllPermissions = (requiredPerms: string[], userPerms: string[]): boolean => {
-            return requiredPerms.every(p => userPerms.includes(p));
-        };
+    getAvailableWidgets(
+        currentUserPermissions: Permission[],
+    ): Array<{ id: string; config: DashboardWidgetConfig }> {
+        const hasAllPermissions = (requiredPerms: string[], userPerms: string[]): boolean =>
+            requiredPerms.every(p => userPerms.includes(p));
 
         return [...this.registry.entries()]
-            .filter(([id, config]) => {
-                return (
+            .filter(
+                ([id, config]) =>
                     !config.requiresPermissions ||
-                    hasAllPermissions(config.requiresPermissions, currentUserPermissions)
-                );
-            })
-            .map(([id]) => id);
+                    hasAllPermissions(config.requiresPermissions, currentUserPermissions),
+            )
+            .map(([id, config]) => ({ id, config }));
     }
 
     getWidgetById(id: string) {
@@ -70,7 +70,7 @@ export class DashboardWidgetService {
     }
 
     private idNotFound(id: string): undefined {
-        // tslint:disable-next-line:no-console
+        // eslint-disable-next-line no-console
         console.error(
             `No dashboard widget was found with the id "${id}"\nAvailable ids: ${[...this.registry.keys()]
                 .map(_id => `"${_id}"`)
@@ -92,7 +92,7 @@ export class DashboardWidgetService {
             // Fall back to the largest supported width
             const sortedWidths = supportedWidths.sort((a, b) => a - b);
             const fallbackWidth = supportedWidths[sortedWidths.length - 1];
-            // tslint:disable-next-line:no-console
+            // eslint-disable-next-line no-console
             console.error(
                 `The "${id}" widget does not support the specified width (${targetWidth}).\nSupported widths are: [${sortedWidths.join(
                     ', ',

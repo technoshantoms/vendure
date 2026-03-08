@@ -9,13 +9,13 @@ import {
     SimpleChanges,
     TemplateRef,
 } from '@angular/core';
-import { FormControl } from '@angular/forms';
+import { UntypedFormControl } from '@angular/forms';
 import { ActivatedRoute, Router } from '@angular/router';
 import {
     CollectionFilterParameter,
     ConfigurableOperationInput,
     DataService,
-    GetCollectionContents,
+    GetCollectionContentsQuery,
 } from '@vendure/admin-ui/core';
 import { BehaviorSubject, combineLatest, Observable, of, Subject } from 'rxjs';
 import {
@@ -36,23 +36,26 @@ import {
     templateUrl: './collection-contents.component.html',
     styleUrls: ['./collection-contents.component.scss'],
     changeDetection: ChangeDetectionStrategy.OnPush,
+    standalone: false
 })
 export class CollectionContentsComponent implements OnInit, OnChanges, OnDestroy {
     @Input() collectionId: string;
     @Input() parentId: string;
+    @Input() inheritFilters: boolean;
     @Input() updatedFilters: ConfigurableOperationInput[] | undefined;
     @Input() previewUpdatedFilters = false;
     @ContentChild(TemplateRef, { static: true }) headerTemplate: TemplateRef<any>;
 
-    contents$: Observable<GetCollectionContents.Items[]>;
+    contents$: Observable<NonNullable<GetCollectionContentsQuery['collection']>['productVariants']['items']>;
     contentsTotalItems$: Observable<number>;
     contentsItemsPerPage$: Observable<number>;
     contentsCurrentPage$: Observable<number>;
-    filterTermControl = new FormControl('');
+    filterTermControl = new UntypedFormControl('');
     isLoading = false;
     private collectionIdChange$ = new BehaviorSubject<string>('');
     private parentIdChange$ = new BehaviorSubject<string>('');
     private filterChanges$ = new BehaviorSubject<ConfigurableOperationInput[]>([]);
+    private inheritFiltersChanges$ = new BehaviorSubject<boolean>(true);
     private refresh$ = new BehaviorSubject<boolean>(true);
     private destroy$ = new Subject<void>();
 
@@ -85,6 +88,13 @@ export class CollectionContentsComponent implements OnInit, OnChanges, OnDestroy
             startWith([]),
         );
 
+        const inheritFiltersChanges$ = this.inheritFiltersChanges$.asObservable().pipe(
+            filter(() => this.inheritFilters != null),
+            distinctUntilChanged(),
+            tap(() => this.setContentsPageNumber(1)),
+            startWith(true),
+        );
+
         const fetchUpdate$ = combineLatest(
             this.collectionIdChange$,
             this.parentIdChange$,
@@ -92,6 +102,7 @@ export class CollectionContentsComponent implements OnInit, OnChanges, OnDestroy
             this.contentsItemsPerPage$,
             filterTerm$,
             filterChanges$,
+            inheritFiltersChanges$,
             this.refresh$,
         );
 
@@ -99,7 +110,7 @@ export class CollectionContentsComponent implements OnInit, OnChanges, OnDestroy
             takeUntil(this.destroy$),
             tap(() => (this.isLoading = true)),
             debounceTime(50),
-            switchMap(([id, parentId, currentPage, itemsPerPage, filterTerm, filters]) => {
+            switchMap(([id, parentId, currentPage, itemsPerPage, filterTerm, filters, inheritFilters]) => {
                 const take = itemsPerPage;
                 const skip = (currentPage - 1) * itemsPerPage;
                 if (filters.length && this.previewUpdatedFilters) {
@@ -111,6 +122,7 @@ export class CollectionContentsComponent implements OnInit, OnChanges, OnDestroy
                             {
                                 parentId,
                                 filters,
+                                inheritFilters,
                             },
                             {
                                 take,
@@ -142,6 +154,9 @@ export class CollectionContentsComponent implements OnInit, OnChanges, OnDestroy
         }
         if ('parentId' in changes) {
             this.parentIdChange$.next(changes.parentId.currentValue);
+        }
+        if ('inheritFilters' in changes) {
+            this.inheritFiltersChanges$.next(changes.inheritFilters.currentValue);
         }
         if ('updatedFilters' in changes) {
             if (this.updatedFilters) {

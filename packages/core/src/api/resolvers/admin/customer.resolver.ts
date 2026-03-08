@@ -8,6 +8,7 @@ import {
     MutationDeleteCustomerAddressArgs,
     MutationDeleteCustomerArgs,
     MutationDeleteCustomerNoteArgs,
+    MutationDeleteCustomersArgs,
     MutationUpdateCustomerAddressArgs,
     MutationUpdateCustomerArgs,
     MutationUpdateCustomerNoteArgs,
@@ -22,7 +23,7 @@ import { PaginatedList } from '@vendure/common/lib/shared-types';
 import { ErrorResultUnion } from '../../../common/error/error-result';
 import { Address } from '../../../entity/address/address.entity';
 import { Customer } from '../../../entity/customer/customer.entity';
-import { CustomerGroupService } from '../../../service/index';
+import { CustomerGroupService } from '../../../service/services/customer-group.service';
 import { CustomerService } from '../../../service/services/customer.service';
 import { OrderService } from '../../../service/services/order.service';
 import { RequestContext } from '../../common/request-context';
@@ -130,6 +131,16 @@ export class CustomerResolver {
             });
         }
         return this.customerService.softDelete(ctx, args.id);
+    }
+
+    @Transaction()
+    @Mutation()
+    @Allow(Permission.DeleteCustomer)
+    async deleteCustomers(
+        @Ctx() ctx: RequestContext,
+        @Args() args: MutationDeleteCustomersArgs,
+    ): Promise<DeletionResponse[]> {
+        return Promise.all(args.ids.map(id => this.deleteCustomer(ctx, { id })));
     }
 
     @Transaction()

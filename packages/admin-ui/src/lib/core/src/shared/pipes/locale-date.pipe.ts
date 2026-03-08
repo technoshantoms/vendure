@@ -19,6 +19,7 @@ import { LocaleBasePipe } from './locale-base.pipe';
 @Pipe({
     name: 'localeDate',
     pure: false,
+    standalone: false,
 })
 export class LocaleDatePipe extends LocaleBasePipe implements PipeTransform {
     constructor(@Optional() dataService?: DataService, @Optional() changeDetectorRef?: ChangeDetectorRef) {
@@ -47,20 +48,24 @@ export class LocaleDatePipe extends LocaleBasePipe implements PipeTransform {
                     hour: 'numeric',
                     minute: 'numeric',
                     second: 'numeric',
-                    hour12: true,
                 };
             case 'mediumTime':
                 return {
                     hour: 'numeric',
                     minute: 'numeric',
                     second: 'numeric',
-                    hour12: true,
                 };
             case 'longDate':
                 return {
                     year: 'numeric',
                     month: 'long',
                     day: 'numeric',
+                };
+            case 'shortDate':
+                return {
+                    day: 'numeric',
+                    month: 'numeric',
+                    year: '2-digit',
                 };
             case 'short':
                 return {
@@ -69,7 +74,6 @@ export class LocaleDatePipe extends LocaleBasePipe implements PipeTransform {
                     year: '2-digit',
                     hour: 'numeric',
                     minute: 'numeric',
-                    hour12: true,
                 };
             default:
                 return;

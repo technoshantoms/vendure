@@ -27,6 +27,7 @@ export interface CollectionDefinition {
     slug?: string;
     private?: boolean;
     filters?: CollectionFilterDefinition[];
+    inheritFilters?: boolean;
     parentName?: string;
     assetPaths?: string[];
 }
@@ -49,7 +50,7 @@ export interface InitialData {
     roles?: RoleDefinition[];
     countries: CountryDefinition[];
     taxRates: Array<{ name: string; percentage: number }>;
-    shippingMethods: Array<{ name: string; price: number }>;
+    shippingMethods: Array<{ name: string; price: number; taxRate?: number }>;
     paymentMethods: Array<{ name: string; handler: ConfigurableOperationInput }>;
     collections: CollectionDefinition[];
 }

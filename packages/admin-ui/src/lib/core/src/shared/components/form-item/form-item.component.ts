@@ -9,7 +9,9 @@ import { ChangeDetectionStrategy, Component, Input } from '@angular/core';
     templateUrl: './form-item.component.html',
     styleUrls: ['./form-item.component.scss'],
     changeDetection: ChangeDetectionStrategy.OnPush,
+    standalone: false,
 })
 export class FormItemComponent {
     @Input() label: string;
+    @Input() tooltip: string;
 }

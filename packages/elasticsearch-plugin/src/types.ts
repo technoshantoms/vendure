@@ -18,6 +18,7 @@ export type ElasticSearchInput = SearchInput & {
     priceRange?: PriceRange;
     priceRangeWithTax?: PriceRange;
     inStock?: boolean;
+    groupBySKU?: boolean;
     [extendedInputField: string]: any;
 };
 
@@ -271,7 +272,7 @@ type GraphQlPermittedReturnType = PrimitiveTypeVariations<GraphQlPrimitive>;
 type CustomMappingDefinition<Args extends any[], T extends GraphQlPermittedReturnType, R> = {
     graphQlType: T;
     public?: boolean;
-    valueFn: (...args: Args) => R;
+    valueFn: (...args: Args) => Promise<R> | R;
 };
 
 type TypeVariationMap<GqlType extends GraphQlPrimitive, TsType> = {

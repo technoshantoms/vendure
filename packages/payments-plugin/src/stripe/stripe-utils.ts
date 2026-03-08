@@ -1,4 +1,5 @@
-import { CurrencyCode, Order } from '@vendure/core';
+import { CurrencyCode, LanguageCode, Order } from '@vendure/core';
+import Stripe from 'stripe';
 
 /**
  * @description
@@ -9,13 +10,12 @@ import { CurrencyCode, Order } from '@vendure/core';
  * > For example, to charge ¥500, provide an amount value of 500.
  *
  * Therefore, for a fractionless currency like JPY, we need to divide the amount by 100 (since Vendure always
- * stores money amounts multiplied by 100). See https://github.com/vendure-ecommerce/vendure/issues/1630
+ * stores money amounts multiplied by 100). See https://github.com/vendurehq/vendure/issues/1630
  */
 export function getAmountInStripeMinorUnits(order: Order): number {
-    const amountInStripeMinorUnits = currencyHasFractionPart(order.currencyCode)
+    return currencyHasFractionPart(order.currencyCode)
         ? order.totalWithTax
         : Math.round(order.totalWithTax / 100);
-    return amountInStripeMinorUnits;
 }
 
 /**
@@ -24,10 +24,7 @@ export function getAmountInStripeMinorUnits(order: Order): number {
  * used by Vendure.
  */
 export function getAmountFromStripeMinorUnits(order: Order, stripeAmount: number): number {
-    const amountInVendureMinorUnits = currencyHasFractionPart(order.currencyCode)
-        ? stripeAmount
-        : stripeAmount * 100;
-    return amountInVendureMinorUnits;
+    return currencyHasFractionPart(order.currencyCode) ? stripeAmount : stripeAmount * 100;
 }
 
 function currencyHasFractionPart(currencyCode: CurrencyCode): boolean {
@@ -36,6 +33,20 @@ function currencyHasFractionPart(currencyCode: CurrencyCode): boolean {
         currency: currencyCode,
         currencyDisplay: 'symbol',
     }).formatToParts(123.45);
-    const hasFractionPart = !!parts.find(p => p.type === 'fraction');
-    return hasFractionPart;
+
+    return parts.some(p => p.type === 'fraction');
+}
+
+/**
+ *
+ * @description
+ * Ensures that the payment intent metadata object contains the expected properties, as defined by the plugin.
+ */
+export function isExpectedVendureStripeEventMetadata(metadata: Stripe.Metadata): metadata is {
+    channelToken: string;
+    orderCode: string;
+    orderId: string;
+    languageCode: LanguageCode;
+} {
+    return !!metadata.channelToken && !!metadata.orderCode && !!metadata.orderId;
 }

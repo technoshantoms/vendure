@@ -1,53 +1,44 @@
+import { CurrencyCode, DeletionResult, ErrorCode, LanguageCode } from '@vendure/common/lib/generated-types';
 import { pick } from '@vendure/common/lib/pick';
-import { PromotionAction, PromotionCondition, PromotionOrderAction } from '@vendure/core';
+import { type PromotionAction, PromotionCondition, PromotionOrderAction } from '@vendure/core';
 import {
     createErrorResultGuard,
     createTestEnvironment,
     E2E_DEFAULT_CHANNEL_TOKEN,
-    ErrorResultGuard,
+    type ErrorResultGuard,
 } from '@vendure/testing';
-import gql from 'graphql-tag';
-import path from 'path';
+import path from 'node:path';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import type { channelFragment, promotionFragment } from './graphql/fragments-admin';
+import type { FragmentOf, ResultOf } from './graphql/graphql-admin';
 
 import { initialData } from '../../../e2e-common/e2e-initial-data';
-import { testConfig, TEST_SETUP_TIMEOUT_MS } from '../../../e2e-common/test-config';
+import { TEST_SETUP_TIMEOUT_MS, testConfig } from '../../../e2e-common/test-config';
 
-import { PROMOTION_FRAGMENT } from './graphql/fragments';
 import {
-    AssignPromotionToChannel,
-    ChannelFragment,
-    CreateChannel,
-    CreatePromotion,
-    CurrencyCode,
-    DeletePromotion,
-    DeletionResult,
-    ErrorCode,
-    GetAdjustmentOperations,
-    GetPromotion,
-    GetPromotionList,
-    LanguageCode,
-    Promotion,
-    PromotionFragment,
-    RemovePromotionFromChannel,
-    UpdatePromotion,
-} from './graphql/generated-e2e-admin-types';
-import {
-    ASSIGN_PROMOTIONS_TO_CHANNEL,
-    CREATE_CHANNEL,
-    CREATE_PROMOTION,
-    DELETE_PROMOTION,
-    REMOVE_PROMOTIONS_FROM_CHANNEL,
+    assignPromotionsToChannelDocument,
+    createChannelDocument,
+    createPromotionDocument,
+    deletePromotionDocument,
+    getAdjustmentOperationsDocument,
+    getPromotionDocument,
+    getPromotionListDocument,
+    removePromotionsFromChannelDocument,
+    updatePromotionDocument,
 } from './graphql/shared-definitions';
 import { assertThrowsWithMessage } from './utils/assert-throws-with-message';
 
-// tslint:disable:no-non-null-assertion
+type PromotionFragment = FragmentOf<typeof promotionFragment>;
+type PromotionListItem = ResultOf<typeof getPromotionListDocument>['promotions']['items'][number];
+
+/* eslint-disable @typescript-eslint/no-non-null-assertion */
 
 describe('Promotion resolver', () => {
     const promoCondition = generateTestCondition('promo_condition');
     const promoCondition2 = generateTestCondition('promo_condition2');
     const promoAction = generateTestAction('promo_action');
 
-    const { server, adminClient, shopClient } = createTestEnvironment({
+    const { server, adminClient } = createTestEnvironment({
         ...testConfig(),
         promotionOptions: {
             promotionConditions: [promoCondition, promoCondition2],
@@ -55,7 +46,7 @@ describe('Promotion resolver', () => {
         },
     });
 
-    const snapshotProps: Array<keyof Promotion.Fragment> = [
+    const snapshotProps: Array<keyof PromotionFragment> = [
         'name',
         'actions',
         'conditions',
@@ -64,10 +55,19 @@ describe('Promotion resolver', () => {
         'startsAt',
         'endsAt',
     ];
-    let promotion: Promotion.Fragment;
+
+    let promotion: PromotionFragment;
 
     const promotionGuard: ErrorResultGuard<PromotionFragment> = createErrorResultGuard(
         input => !!input.couponCode,
+    );
+
+    const promotionQueryGuard: ErrorResultGuard<
+        NonNullable<ResultOf<typeof getPromotionDocument>['promotion']>
+    > = createErrorResultGuard(input => !!input.id);
+
+    const channelGuard: ErrorResultGuard<FragmentOf<typeof channelFragment>> = createErrorResultGuard(
+        input => !!input.token,
     );
 
     beforeAll(async () => {
@@ -84,16 +84,19 @@ describe('Promotion resolver', () => {
     });
 
     it('createPromotion', async () => {
-        const { createPromotion } = await adminClient.query<
-            CreatePromotion.Mutation,
-            CreatePromotion.Variables
-        >(CREATE_PROMOTION, {
+        const { createPromotion } = await adminClient.query(createPromotionDocument, {
             input: {
-                name: 'test promotion',
                 enabled: true,
                 couponCode: 'TEST123',
-                startsAt: new Date('2019-10-30T00:00:00.000Z'),
-                endsAt: new Date('2019-12-01T00:00:00.000Z'),
+                startsAt: new Date('2019-10-30T00:00:00.000Z').toISOString(),
+                endsAt: new Date('2019-12-01T00:00:00.000Z').toISOString(),
+                translations: [
+                    {
+                        languageCode: LanguageCode.en,
+                        name: 'test promotion',
+                        description: 'a test promotion',
+                    },
+                ],
                 conditions: [
                     {
                         code: promoCondition.code,
@@ -119,14 +122,48 @@ describe('Promotion resolver', () => {
         expect(pick(promotion, snapshotProps)).toMatchSnapshot();
     });
 
-    it('createPromotion return error result with empty conditions and no couponCode', async () => {
-        const { createPromotion } = await adminClient.query<
-            CreatePromotion.Mutation,
-            CreatePromotion.Variables
-        >(CREATE_PROMOTION, {
+    it('createPromotion with no description', async () => {
+        const { createPromotion } = await adminClient.query(createPromotionDocument, {
             input: {
-                name: 'bad promotion',
                 enabled: true,
+                couponCode: 'TEST567',
+                translations: [
+                    {
+                        languageCode: LanguageCode.en,
+                        name: 'test promotion no description',
+                        customFields: {},
+                    },
+                ],
+                conditions: [],
+                actions: [
+                    {
+                        code: promoAction.code,
+                        arguments: [
+                            {
+                                name: 'facetValueIds',
+                                value: '["T_1"]',
+                            },
+                        ],
+                    },
+                ],
+            },
+        });
+        promotionGuard.assertSuccess(createPromotion);
+        expect(createPromotion.name).toBe('test promotion no description');
+        expect(createPromotion.description).toBe('');
+        expect(createPromotion.translations[0].description).toBe('');
+    });
+
+    it('createPromotion return error result with empty conditions and no couponCode', async () => {
+        const { createPromotion } = await adminClient.query(createPromotionDocument, {
+            input: {
+                enabled: true,
+                translations: [
+                    {
+                        languageCode: LanguageCode.en,
+                        name: 'bad promotion',
+                    },
+                ],
                 conditions: [],
                 actions: [
                     {
@@ -150,15 +187,12 @@ describe('Promotion resolver', () => {
     });
 
     it('updatePromotion', async () => {
-        const { updatePromotion } = await adminClient.query<
-            UpdatePromotion.Mutation,
-            UpdatePromotion.Variables
-        >(UPDATE_PROMOTION, {
+        const { updatePromotion } = await adminClient.query(updatePromotionDocument, {
             input: {
                 id: promotion.id,
                 couponCode: 'TEST1235',
-                startsAt: new Date('2019-05-30T22:00:00.000Z'),
-                endsAt: new Date('2019-06-01T22:00:00.000Z'),
+                startsAt: new Date('2019-05-30T22:00:00.000Z').toISOString(),
+                endsAt: new Date('2019-06-01T22:00:00.000Z').toISOString(),
                 conditions: [
                     {
                         code: promoCondition.code,
@@ -177,10 +211,7 @@ describe('Promotion resolver', () => {
     });
 
     it('updatePromotion return error result with empty conditions and no couponCode', async () => {
-        const { updatePromotion } = await adminClient.query<
-            UpdatePromotion.Mutation,
-            UpdatePromotion.Variables
-        >(UPDATE_PROMOTION, {
+        const { updatePromotion } = await adminClient.query(updatePromotionDocument, {
             input: {
                 id: promotion.id,
                 couponCode: '',
@@ -196,28 +227,24 @@ describe('Promotion resolver', () => {
     });
 
     it('promotion', async () => {
-        const result = await adminClient.query<GetPromotion.Query, GetPromotion.Variables>(GET_PROMOTION, {
+        const result = await adminClient.query(getPromotionDocument, {
             id: promotion.id,
         });
 
-        expect(result.promotion!.name).toBe(promotion.name);
+        promotionQueryGuard.assertSuccess(result.promotion);
+
+        expect(result.promotion.name).toBe(promotion.name);
     });
 
     it('promotions', async () => {
-        const result = await adminClient.query<GetPromotionList.Query, GetPromotionList.Variables>(
-            GET_PROMOTION_LIST,
-            {},
-        );
+        const result = await adminClient.query(getPromotionListDocument, {});
 
-        expect(result.promotions.totalItems).toBe(1);
+        expect(result.promotions.totalItems).toBe(2);
         expect(result.promotions.items[0].name).toBe('test promotion');
     });
 
     it('adjustmentOperations', async () => {
-        const result = await adminClient.query<
-            GetAdjustmentOperations.Query,
-            GetAdjustmentOperations.Variables
-        >(GET_ADJUSTMENT_OPERATIONS);
+        const result = await adminClient.query(getAdjustmentOperationsDocument);
 
         expect(result.promotionActions).toMatchSnapshot();
         expect(result.promotionConditions).toMatchSnapshot();
@@ -225,12 +252,9 @@ describe('Promotion resolver', () => {
 
     describe('channels', () => {
         const SECOND_CHANNEL_TOKEN = 'SECOND_CHANNEL_TOKEN';
-        let secondChannel: ChannelFragment;
+        let secondChannel: FragmentOf<typeof channelFragment>;
         beforeAll(async () => {
-            const { createChannel } = await adminClient.query<
-                CreateChannel.Mutation,
-                CreateChannel.Variables
-            >(CREATE_CHANNEL, {
+            const { createChannel } = await adminClient.query(createChannelDocument, {
                 input: {
                     code: 'second-channel',
                     token: SECOND_CHANNEL_TOKEN,
@@ -241,12 +265,13 @@ describe('Promotion resolver', () => {
                     defaultShippingZoneId: 'T_2',
                 },
             });
-            secondChannel = createChannel as any;
+            channelGuard.assertSuccess(createChannel);
+            secondChannel = createChannel;
         });
 
         it('does not list Promotions not in active channel', async () => {
             adminClient.setChannelToken(SECOND_CHANNEL_TOKEN);
-            const { promotions } = await adminClient.query<GetPromotionList.Query>(GET_PROMOTION_LIST);
+            const { promotions } = await adminClient.query(getPromotionListDocument);
 
             expect(promotions.totalItems).toBe(0);
             expect(promotions.items).toEqual([]);
@@ -254,22 +279,16 @@ describe('Promotion resolver', () => {
 
         it('does not return Promotion not in active channel', async () => {
             adminClient.setChannelToken(SECOND_CHANNEL_TOKEN);
-            const { promotion: result } = await adminClient.query<GetPromotion.Query, GetPromotion.Variables>(
-                GET_PROMOTION,
-                {
-                    id: promotion.id,
-                },
-            );
+            const { promotion: result } = await adminClient.query(getPromotionDocument, {
+                id: promotion.id,
+            });
 
             expect(result).toBeNull();
         });
 
         it('assignPromotionsToChannel', async () => {
             adminClient.setChannelToken(E2E_DEFAULT_CHANNEL_TOKEN);
-            const { assignPromotionsToChannel } = await adminClient.query<
-                AssignPromotionToChannel.Mutation,
-                AssignPromotionToChannel.Variables
-            >(ASSIGN_PROMOTIONS_TO_CHANNEL, {
+            const { assignPromotionsToChannel } = await adminClient.query(assignPromotionsToChannelDocument, {
                 input: {
                     channelId: secondChannel.id,
                     promotionIds: [promotion.id],
@@ -279,80 +298,72 @@ describe('Promotion resolver', () => {
             expect(assignPromotionsToChannel).toEqual([{ id: promotion.id, name: promotion.name }]);
 
             adminClient.setChannelToken(SECOND_CHANNEL_TOKEN);
-            const { promotion: result } = await adminClient.query<GetPromotion.Query, GetPromotion.Variables>(
-                GET_PROMOTION,
-                {
-                    id: promotion.id,
-                },
-            );
+            const { promotion: result } = await adminClient.query(getPromotionDocument, {
+                id: promotion.id,
+            });
             expect(result?.id).toBe(promotion.id);
 
-            const { promotions } = await adminClient.query<GetPromotionList.Query>(GET_PROMOTION_LIST);
+            const { promotions } = await adminClient.query(getPromotionListDocument);
             expect(promotions.totalItems).toBe(1);
             expect(promotions.items.map(pick(['id']))).toEqual([{ id: promotion.id }]);
         });
 
         it('removePromotionsFromChannel', async () => {
             adminClient.setChannelToken(E2E_DEFAULT_CHANNEL_TOKEN);
-            const { removePromotionsFromChannel } = await adminClient.query<
-                RemovePromotionFromChannel.Mutation,
-                RemovePromotionFromChannel.Variables
-            >(REMOVE_PROMOTIONS_FROM_CHANNEL, {
-                input: {
-                    channelId: secondChannel.id,
-                    promotionIds: [promotion.id],
+            const { removePromotionsFromChannel } = await adminClient.query(
+                removePromotionsFromChannelDocument,
+                {
+                    input: {
+                        channelId: secondChannel.id,
+                        promotionIds: [promotion.id],
+                    },
                 },
-            });
+            );
 
             expect(removePromotionsFromChannel).toEqual([{ id: promotion.id, name: promotion.name }]);
 
             adminClient.setChannelToken(SECOND_CHANNEL_TOKEN);
-            const { promotion: result } = await adminClient.query<GetPromotion.Query, GetPromotion.Variables>(
-                GET_PROMOTION,
-                {
-                    id: promotion.id,
-                },
-            );
+            const { promotion: result } = await adminClient.query(getPromotionDocument, {
+                id: promotion.id,
+            });
             expect(result).toBeNull();
 
-            const { promotions } = await adminClient.query<GetPromotionList.Query>(GET_PROMOTION_LIST);
+            const { promotions } = await adminClient.query(getPromotionListDocument);
             expect(promotions.totalItems).toBe(0);
         });
     });
 
     describe('deletion', () => {
-        let allPromotions: GetPromotionList.Items[];
-        let promotionToDelete: GetPromotionList.Items;
+        let allPromotions: PromotionListItem[];
+        let promotionToDelete: PromotionListItem;
 
         beforeAll(async () => {
             adminClient.setChannelToken(E2E_DEFAULT_CHANNEL_TOKEN);
-            const result = await adminClient.query<GetPromotionList.Query>(GET_PROMOTION_LIST);
+            const result = await adminClient.query(getPromotionListDocument);
             allPromotions = result.promotions.items;
         });
 
         it('deletes a promotion', async () => {
             promotionToDelete = allPromotions[0];
-            const result = await adminClient.query<DeletePromotion.Mutation, DeletePromotion.Variables>(
-                DELETE_PROMOTION,
-                { id: promotionToDelete.id },
-            );
+            const result = await adminClient.query(deletePromotionDocument, {
+                id: promotionToDelete.id,
+            });
 
-            expect(result.deletePromotion).toEqual({ result: DeletionResult.DELETED });
+            expect(result.deletePromotion).toEqual({
+                result: DeletionResult.DELETED,
+            });
         });
 
         it('cannot get a deleted promotion', async () => {
-            const result = await adminClient.query<GetPromotion.Query, GetPromotion.Variables>(
-                GET_PROMOTION,
-                {
-                    id: promotionToDelete.id,
-                },
-            );
+            const result = await adminClient.query(getPromotionDocument, {
+                id: promotionToDelete.id,
+            });
 
             expect(result.promotion).toBe(null);
         });
 
         it('deleted promotion omitted from list', async () => {
-            const result = await adminClient.query<GetPromotionList.Query>(GET_PROMOTION_LIST);
+            const result = await adminClient.query(getPromotionListDocument);
 
             expect(result.promotions.items.length).toBe(allPromotions.length - 1);
             expect(result.promotions.items.map(c => c.id).includes(promotionToDelete.id)).toBe(false);
@@ -362,24 +373,24 @@ describe('Promotion resolver', () => {
             'updatePromotion throws for deleted promotion',
             assertThrowsWithMessage(
                 () =>
-                    adminClient.query<UpdatePromotion.Mutation, UpdatePromotion.Variables>(UPDATE_PROMOTION, {
+                    adminClient.query(updatePromotionDocument, {
                         input: {
                             id: promotionToDelete.id,
                             enabled: false,
                         },
                     }),
-                `No Promotion with the id '1' could be found`,
+                'No Promotion with the id "1" could be found',
             ),
         );
     });
 });
 
-function generateTestCondition(code: string): PromotionCondition<any> {
+function generateTestCondition(code: string): PromotionCondition {
     return new PromotionCondition({
         code,
         description: [{ languageCode: LanguageCode.en, value: `description for ${code}` }],
         args: { arg: { type: 'int' } },
-        check: (order, args) => true,
+        check: () => true,
     });
 }
 
@@ -388,66 +399,8 @@ function generateTestAction(code: string): PromotionAction<any> {
         code,
         description: [{ languageCode: LanguageCode.en, value: `description for ${code}` }],
         args: { facetValueIds: { type: 'ID', list: true } },
-        execute: (order, args) => {
+        execute: () => {
             return 42;
         },
     });
 }
-
-export const GET_PROMOTION_LIST = gql`
-    query GetPromotionList($options: PromotionListOptions) {
-        promotions(options: $options) {
-            items {
-                ...Promotion
-            }
-            totalItems
-        }
-    }
-    ${PROMOTION_FRAGMENT}
-`;
-
-export const GET_PROMOTION = gql`
-    query GetPromotion($id: ID!) {
-        promotion(id: $id) {
-            ...Promotion
-        }
-    }
-    ${PROMOTION_FRAGMENT}
-`;
-
-export const UPDATE_PROMOTION = gql`
-    mutation UpdatePromotion($input: UpdatePromotionInput!) {
-        updatePromotion(input: $input) {
-            ...Promotion
-            ... on ErrorResult {
-                errorCode
-                message
-            }
-        }
-    }
-    ${PROMOTION_FRAGMENT}
-`;
-
-export const CONFIGURABLE_DEF_FRAGMENT = gql`
-    fragment ConfigurableOperationDef on ConfigurableOperationDefinition {
-        args {
-            name
-            type
-            ui
-        }
-        code
-        description
-    }
-`;
-
-export const GET_ADJUSTMENT_OPERATIONS = gql`
-    query GetAdjustmentOperations {
-        promotionActions {
-            ...ConfigurableOperationDef
-        }
-        promotionConditions {
-            ...ConfigurableOperationDef
-        }
-    }
-    ${CONFIGURABLE_DEF_FRAGMENT}
-`;

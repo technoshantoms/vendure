@@ -14,6 +14,7 @@ import {
     templateUrl: './cancel-order-dialog.component.html',
     styleUrls: ['./cancel-order-dialog.component.scss'],
     changeDetection: ChangeDetectionStrategy.OnPush,
+    standalone: false,
 })
 export class CancelOrderDialogComponent implements OnInit, Dialog<CancelOrderInput> {
     order: OrderDetailFragment;
@@ -35,9 +36,10 @@ export class CancelOrderDialogComponent implements OnInit, Dialog<CancelOrderInp
     }
 
     ngOnInit() {
-        this.lineQuantities = this.order.lines.reduce((result, line) => {
-            return { ...result, [line.id]: line.quantity };
-        }, {});
+        this.lineQuantities = this.order.lines.reduce(
+            (result, line) => ({ ...result, [line.id]: line.quantity }),
+            {},
+        );
     }
 
     radioChanged() {

@@ -21,7 +21,9 @@ import {
 } from './search-strategy-utils';
 
 /**
- * A weighted fulltext search for MySQL / MariaDB.
+ * @description A weighted fulltext search for MySQL / MariaDB.
+ *
+ * @docsCategory DefaultSearchPlugin
  */
 export class MysqlSearchStrategy implements SearchStrategy {
     private readonly minTermLength = 2;
@@ -95,19 +97,24 @@ export class MysqlSearchStrategy implements SearchStrategy {
                 .addSelect('MIN(si.priceWithTax)', 'minPriceWithTax')
                 .addSelect('MAX(si.priceWithTax)', 'maxPriceWithTax');
         }
+
         this.applyTermAndFilters(ctx, qb, input);
+
         if (sort) {
             if (sort.name) {
-                qb.addOrderBy(input.groupByProduct ? 'MIN(si.productName)' : 'si.productName', sort.name);
+                qb.addOrderBy('si_productName', sort.name);
             }
             if (sort.price) {
-                qb.addOrderBy(input.groupByProduct ? 'MIN(si.price)' : 'si.price', sort.price);
+                qb.addOrderBy('si_price', sort.price);
             }
-        } else {
-            if (input.term && input.term.length > this.minTermLength) {
-                qb.orderBy('score', 'DESC');
-            }
+        } else if (input.term && input.term.length > this.minTermLength) {
+            qb.addOrderBy('score', 'DESC');
         }
+
+        // Required to ensure deterministic sorting.
+        // E.g. in case of sorting products with duplicate name, price or score results.
+        qb.addOrderBy('si_productVariantId', 'ASC');
+
         if (enabledOnly) {
             qb.andWhere('si.enabled = :enabled', { enabled: true });
         }
@@ -116,7 +123,14 @@ export class MysqlSearchStrategy implements SearchStrategy {
             .limit(take)
             .offset(skip)
             .getRawMany()
-            .then(res => res.map(r => mapToSearchResult(r, ctx.channel.currencyCode)));
+            .then(res =>
+                res.map(r =>
+                    mapToSearchResult(
+                        r,
+                        this.options.indexCurrencyCode ? r.si_currencyCode : ctx.channel.defaultCurrencyCode,
+                    ),
+                ),
+            );
     }
 
     async getTotalCount(ctx: RequestContext, input: SearchInput, enabledOnly: boolean): Promise<number> {
@@ -145,8 +159,16 @@ export class MysqlSearchStrategy implements SearchStrategy {
         qb: SelectQueryBuilder<SearchIndexItem>,
         input: SearchInput,
     ): SelectQueryBuilder<SearchIndexItem> {
-        const { term, facetValueFilters, facetValueIds, facetValueOperator, collectionId, collectionSlug } =
-            input;
+        const {
+            term,
+            facetValueFilters,
+            facetValueIds,
+            facetValueOperator,
+            collectionId,
+            collectionSlug,
+            collectionIds,
+            collectionSlugs,
+        } = input;
 
         if (term && term.length > this.minTermLength) {
             const safeTerm = term
@@ -160,7 +182,7 @@ export class MysqlSearchStrategy implements SearchStrategy {
                 .createQueryBuilder('si_inner')
                 .select('si_inner.productId', 'inner_productId')
                 .addSelect('si_inner.productVariantId', 'inner_productVariantId')
-                .addSelect(`IF (si_inner.sku LIKE :like_term, 10, 0)`, 'sku_score')
+                .addSelect('IF (si_inner.sku LIKE :like_term, 10, 0)', 'sku_score')
                 .addSelect(
                     `(SELECT sku_score) +
                      MATCH (si_inner.productName) AGAINST (:term IN BOOLEAN MODE) * 2 +
@@ -243,14 +265,43 @@ export class MysqlSearchStrategy implements SearchStrategy {
             );
         }
         if (collectionId) {
-            qb.andWhere(`FIND_IN_SET (:collectionId, si.collectionIds)`, { collectionId });
+            qb.andWhere('FIND_IN_SET (:collectionId, si.collectionIds)', { collectionId });
         }
         if (collectionSlug) {
-            qb.andWhere(`FIND_IN_SET (:collectionSlug, si.collectionSlugs)`, { collectionSlug });
+            qb.andWhere('FIND_IN_SET (:collectionSlug, si.collectionSlugs)', { collectionSlug });
+        }
+        if (collectionIds?.length) {
+            qb.andWhere(
+                new Brackets(qb1 => {
+                    for (const id of Array.from(new Set(collectionIds))) {
+                        const placeholder = createPlaceholderFromId(id);
+                        qb1.orWhere(`FIND_IN_SET(:${placeholder}, si.collectionIds)`, {
+                            [placeholder]: id,
+                        });
+                    }
+                }),
+            );
+        }
+        if (collectionSlugs?.length) {
+            qb.andWhere(
+                new Brackets(qb1 => {
+                    for (const slug of Array.from(new Set(collectionSlugs))) {
+                        const placeholder = createPlaceholderFromId(slug);
+                        qb1.orWhere(`FIND_IN_SET(:${placeholder}, si.collectionSlugs)`, {
+                            [placeholder]: slug,
+                        });
+                    }
+                }),
+            );
         }
 
-        applyLanguageConstraints(qb, ctx.languageCode, ctx.channel.defaultLanguageCode);
         qb.andWhere('si.channelId = :channelId', { channelId: ctx.channelId });
+        applyLanguageConstraints(qb, ctx.languageCode, ctx.channel.defaultLanguageCode);
+
+        if (this.options.indexCurrencyCode) {
+            qb.andWhere('si.currencyCode = :currencyCode', { currencyCode: ctx.currencyCode });
+        }
+
         if (input.groupByProduct === true) {
             qb.groupBy('si.productId');
             qb.addSelect('BIT_OR(si.enabled)', 'productEnabled');
@@ -264,7 +315,7 @@ export class MysqlSearchStrategy implements SearchStrategy {
      * "MIN" function in this case to all other columns than the productId.
      */
     private createMysqlSelect(groupByProduct: boolean): string {
-        return getFieldsToSelect(this.options.indexStockStatus)
+        return getFieldsToSelect(this.options.indexStockStatus, this.options.indexCurrencyCode)
             .map(col => {
                 const qualifiedName = `si.${col}`;
                 const alias = `si_${col}`;

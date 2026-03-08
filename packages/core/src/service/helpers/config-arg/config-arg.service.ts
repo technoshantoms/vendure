@@ -5,6 +5,7 @@ import { ConfigurableOperationDef } from '../../../common/configurable-operation
 import { UserInputError } from '../../../common/error/errors';
 import { CollectionFilter } from '../../../config/catalog/collection-filter';
 import { ConfigService } from '../../../config/config.service';
+import { EntityDuplicator } from '../../../config/entity/entity-duplicator';
 import { FulfillmentHandler } from '../../../config/fulfillment/fulfillment-handler';
 import { PaymentMethodEligibilityChecker } from '../../../config/payment/payment-method-eligibility-checker';
 import { PaymentMethodHandler } from '../../../config/payment/payment-method-handler';
@@ -15,6 +16,7 @@ import { ShippingEligibilityChecker } from '../../../config/shipping-method/ship
 
 export type ConfigDefTypeMap = {
     CollectionFilter: CollectionFilter;
+    EntityDuplicator: EntityDuplicator;
     FulfillmentHandler: FulfillmentHandler;
     PaymentMethodEligibilityChecker: PaymentMethodEligibilityChecker;
     PaymentMethodHandler: PaymentMethodHandler;
@@ -36,6 +38,7 @@ export class ConfigArgService {
     constructor(private configService: ConfigService) {
         this.definitionsByType = {
             CollectionFilter: this.configService.catalogOptions.collectionFilters,
+            EntityDuplicator: this.configService.entityOptions.entityDuplicators,
             FulfillmentHandler: this.configService.shippingOptions.fulfillmentHandlers,
             PaymentMethodEligibilityChecker:
                 this.configService.paymentOptions.paymentMethodEligibilityCheckers || [],
@@ -55,12 +58,12 @@ export class ConfigArgService {
         const defsOfType = this.getDefinitions(defType);
         const match = defsOfType.find(def => def.code === code);
         if (!match) {
-            throw new UserInputError(`error.no-configurable-operation-def-with-code-found`, {
+            throw new UserInputError('error.no-configurable-operation-def-with-code-found', {
                 code,
                 type: defType,
             });
         }
-        return match as ConfigDefTypeMap[T];
+        return match;
     }
 
     /**
@@ -90,17 +93,6 @@ export class ConfigArgService {
         return output;
     }
 
-    private parseOperationArgs(
-        input: ConfigurableOperationInput,
-        checkerOrCalculator: ShippingEligibilityChecker | ShippingCalculator,
-    ): ConfigurableOperation {
-        const output: ConfigurableOperation = {
-            code: input.code,
-            args: input.arguments,
-        };
-        return output;
-    }
-
     private validateRequiredFields(input: ConfigurableOperationInput, def: ConfigurableOperationDef) {
         for (const [name, argDef] of Object.entries(def.args)) {
             if (argDef.required) {
@@ -113,7 +105,7 @@ export class ConfigArgService {
                     } else {
                         valid = !!inputArg && JSON.parse(inputArg.value) != null;
                     }
-                } catch (e) {
+                } catch (e: any) {
                     // ignore
                 }
 

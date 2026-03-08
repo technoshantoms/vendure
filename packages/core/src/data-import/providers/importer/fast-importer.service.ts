@@ -23,8 +23,8 @@ import { ProductVariant } from '../../../entity/product-variant/product-variant.
 import { ProductAsset } from '../../../entity/product/product-asset.entity';
 import { ProductTranslation } from '../../../entity/product/product-translation.entity';
 import { Product } from '../../../entity/product/product.entity';
+import { RequestContextService } from '../../../service/helpers/request-context/request-context.service';
 import { TranslatableSaver } from '../../../service/helpers/translatable-saver/translatable-saver';
-import { RequestContextService } from '../../../service/index';
 import { ChannelService } from '../../../service/services/channel.service';
 import { StockMovementService } from '../../../service/services/stock-movement.service';
 
@@ -72,7 +72,7 @@ export class FastImporterService {
 
     async createProduct(input: CreateProductInput): Promise<ID> {
         this.ensureInitialized();
-        // https://github.com/vendure-ecommerce/vendure/issues/2053
+        // https://github.com/vendurehq/vendure/issues/2053
         // normalizes slug without validation for faster performance
         input.translations.map(translation => {
             translation.slug = normalizeString(translation.slug as string, '-');
@@ -85,7 +85,7 @@ export class FastImporterService {
             beforeSave: async p => {
                 p.channels = unique([this.defaultChannel, this.importCtx.channel], 'id');
                 if (input.facetValueIds) {
-                    p.facetValues = input.facetValueIds.map(id => ({ id } as any));
+                    p.facetValues = input.facetValueIds.map(id => ({ id }) as any);
                 }
                 if (input.featuredAssetId) {
                     p.featuredAsset = { id: input.featuredAssetId } as any;
@@ -115,6 +115,9 @@ export class FastImporterService {
             input,
             entityType: ProductOptionGroup,
             translationType: ProductOptionGroupTranslation,
+            beforeSave: async g => {
+                g.channels = unique([this.defaultChannel, this.importCtx.channel], 'id');
+            },
         });
         return group.id;
     }
@@ -126,7 +129,10 @@ export class FastImporterService {
             input,
             entityType: ProductOption,
             translationType: ProductOptionTranslation,
-            beforeSave: po => (po.group = { id: input.productOptionGroupId } as any),
+            beforeSave: po => {
+                po.group = { id: input.productOptionGroupId } as any;
+                po.channels = unique([this.defaultChannel, this.importCtx.channel], 'id');
+            },
         });
         return option.id;
     }
@@ -164,10 +170,10 @@ export class FastImporterService {
                 variant.channels = unique([this.defaultChannel, this.importCtx.channel], 'id');
                 const { optionIds } = input;
                 if (optionIds && optionIds.length) {
-                    variant.options = optionIds.map(id => ({ id } as any));
+                    variant.options = optionIds.map(id => ({ id }) as any);
                 }
                 if (input.facetValueIds) {
-                    variant.facetValues = input.facetValueIds.map(id => ({ id } as any));
+                    variant.facetValues = input.facetValueIds.map(id => ({ id }) as any);
                 }
                 variant.product = { id: input.productId } as any;
                 variant.taxCategory = { id: input.taxCategoryId } as any;
@@ -189,19 +195,17 @@ export class FastImporterService {
                 .getRepository(this.importCtx, ProductVariantAsset)
                 .save(variantAssets, { reload: false });
         }
-        if (input.stockOnHand != null && input.stockOnHand !== 0) {
-            await this.stockMovementService.adjustProductVariantStock(
-                this.importCtx,
-                createdVariant.id,
-                0,
-                input.stockOnHand,
-            );
-        }
+        await this.stockMovementService.adjustProductVariantStock(
+            this.importCtx,
+            createdVariant.id,
+            input.stockLevels ?? input.stockOnHand ?? 0,
+        );
         const assignedChannelIds = unique([this.defaultChannel, this.importCtx.channel], 'id').map(c => c.id);
         for (const channelId of assignedChannelIds) {
             const variantPrice = new ProductVariantPrice({
                 price: input.price,
                 channelId,
+                currencyCode: this.defaultChannel.defaultCurrencyCode,
             });
             variantPrice.variant = createdVariant;
             await this.connection
@@ -215,7 +219,7 @@ export class FastImporterService {
     private ensureInitialized() {
         if (!this.defaultChannel || !this.importCtx) {
             throw new Error(
-                `The FastImporterService must be initialized with a call to 'initialize()' before importing data`,
+                "The FastImporterService must be initialized with a call to 'initialize()' before importing data",
             );
         }
     }

@@ -1,4 +1,4 @@
-/* tslint:disable:no-non-null-assertion */
+/* eslint-disable @typescript-eslint/no-non-null-assertion */
 import { Args, Query, Resolver } from '@nestjs/graphql';
 import {
     Asset,
@@ -7,7 +7,6 @@ import {
     ID,
     PluginCommonModule,
     Product,
-    ProductVariant,
     ProductVariantService,
     RequestContext,
     TransactionalConnection,
@@ -25,7 +24,8 @@ class TestResolver {
 
     @Query()
     async hydrateTest(@Ctx() ctx: RequestContext, @Args() args: { id: ID }) {
-        const product = await this.connection.getRepository(ctx, Product).findOne(args.id, {
+        const product = await this.connection.getRepository(ctx, Product).findOne({
+            where: { id: args.id },
             relations: ['featuredAsset'],
         });
         await this.entityHydrator.hydrate(ctx, product!, {
@@ -35,7 +35,7 @@ class TestResolver {
     }
 }
 
-// A plugin to explore solutions to https://github.com/vendure-ecommerce/vendure/issues/1103
+// A plugin to explore solutions to https://github.com/vendurehq/vendure/issues/1103
 @VendurePlugin({
     imports: [PluginCommonModule],
     adminApiExtensions: {

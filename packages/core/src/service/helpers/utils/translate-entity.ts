@@ -62,7 +62,7 @@ export function translateEntity<T extends Translatable & VendureEntity>(
     }
 
     if (!translation) {
-        throw new InternalServerError(`error.entity-has-no-translation-in-language`, {
+        throw new InternalServerError('error.entity-has-no-translation-in-language', {
             entityName: translatable.constructor.name,
             languageCode: Array.isArray(languageCode) ? languageCode.join() : languageCode,
         });
@@ -80,7 +80,7 @@ export function translateEntity<T extends Translatable & VendureEntity>(
             }
             Object.assign(translated.customFields, value);
         } else if (key !== 'base' && key !== 'id' && key !== 'createdAt' && key !== 'updatedAt') {
-            translated[key] = value;
+            translated[key] = value ?? '';
         }
     }
     return translated;
@@ -97,7 +97,7 @@ export function translateDeep<T extends Translatable & VendureEntity>(
     let translatedEntity: Translated<T>;
     try {
         translatedEntity = translateEntity(translatable, languageCode);
-    } catch (e) {
+    } catch (e: any) {
         translatedEntity = translatable as any;
     }
 
@@ -144,9 +144,25 @@ function translateLeaf(
 ): any {
     if (object && object[property]) {
         if (Array.isArray(object[property])) {
-            return object[property].map((nested2: any) => translateEntity(nested2, languageCode));
+            return object[property].map((nested2: any) => {
+                try {
+                    return translateEntity(nested2, languageCode);
+                } catch (e: any) {
+                    if (e instanceof InternalServerError) {
+                        return nested2;
+                    }
+                    throw e;
+                }
+            });
         } else if (object[property]) {
-            return translateEntity(object[property], languageCode);
+            try {
+                return translateEntity(object[property], languageCode);
+            } catch (e: any) {
+                if (e instanceof InternalServerError) {
+                    return object[property];
+                }
+                throw e;
+            }
         }
     }
 }

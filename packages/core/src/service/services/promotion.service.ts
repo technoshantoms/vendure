@@ -8,24 +8,26 @@ import {
     CreatePromotionResult,
     DeletionResponse,
     DeletionResult,
+    OrderType,
     RemovePromotionsFromChannelInput,
     UpdatePromotionInput,
     UpdatePromotionResult,
 } from '@vendure/common/lib/generated-types';
-import { omit } from '@vendure/common/lib/omit';
 import { ID, PaginatedList } from '@vendure/common/lib/shared-types';
 import { unique } from '@vendure/common/lib/unique';
+import { In, IsNull } from 'typeorm';
 
 import { RequestContext } from '../../api/common/request-context';
-import { RelationPaths } from '../../api/index';
+import { RelationPaths } from '../../api/decorators/relations.decorator';
 import { ErrorResultUnion, JustErrorResults } from '../../common/error/error-result';
-import { IllegalOperationError, UserInputError } from '../../common/error/errors';
+import { UserInputError } from '../../common/error/errors';
 import { MissingConditionsError } from '../../common/error/generated-graphql-admin-errors';
 import {
     CouponCodeExpiredError,
     CouponCodeInvalidError,
     CouponCodeLimitError,
 } from '../../common/error/generated-graphql-shop-errors';
+import { Instrument } from '../../common/instrument-decorator';
 import { AdjustmentSource } from '../../common/types/adjustment-source';
 import { ListQueryOptions } from '../../common/types/common-types';
 import { assertFound, idsAreEqual } from '../../common/utils';
@@ -34,6 +36,7 @@ import { PromotionAction } from '../../config/promotion/promotion-action';
 import { PromotionCondition } from '../../config/promotion/promotion-condition';
 import { TransactionalConnection } from '../../connection/transactional-connection';
 import { Order } from '../../entity/order/order.entity';
+import { PromotionTranslation } from '../../entity/promotion/promotion-translation.entity';
 import { Promotion } from '../../entity/promotion/promotion.entity';
 import { EventBus } from '../../event-bus';
 import { PromotionEvent } from '../../event-bus/events/promotion-event';
@@ -41,7 +44,8 @@ import { ConfigArgService } from '../helpers/config-arg/config-arg.service';
 import { CustomFieldRelationService } from '../helpers/custom-field-relation/custom-field-relation.service';
 import { ListQueryBuilder } from '../helpers/list-query-builder/list-query-builder';
 import { OrderState } from '../helpers/order-state-machine/order-state';
-import { patchEntity } from '../helpers/utils/patch-entity';
+import { TranslatableSaver } from '../helpers/translatable-saver/translatable-saver';
+import { TranslatorService } from '../helpers/translator/translator.service';
 
 import { ChannelService } from './channel.service';
 
@@ -52,6 +56,7 @@ import { ChannelService } from './channel.service';
  * @docsCategory services
  */
 @Injectable()
+@Instrument()
 export class PromotionService {
     availableConditions: PromotionCondition[] = [];
     availableActions: PromotionAction[] = [];
@@ -64,6 +69,8 @@ export class PromotionService {
         private configArgService: ConfigArgService,
         private customFieldRelationService: CustomFieldRelationService,
         private eventBus: EventBus,
+        private translatableSaver: TranslatableSaver,
+        private translator: TranslatorService,
     ) {
         this.availableConditions = this.configService.promotionOptions.promotionConditions || [];
         this.availableActions = this.configService.promotionOptions.promotionActions || [];
@@ -76,16 +83,19 @@ export class PromotionService {
     ): Promise<PaginatedList<Promotion>> {
         return this.listQueryBuilder
             .build(Promotion, options, {
-                where: { deletedAt: null },
+                where: { deletedAt: IsNull() },
                 channelId: ctx.channelId,
                 relations,
                 ctx,
             })
             .getManyAndCount()
-            .then(([items, totalItems]) => ({
-                items,
-                totalItems,
-            }));
+            .then(([promotions, totalItems]) => {
+                const items = promotions.map(promotion => this.translator.translate(promotion, ctx));
+                return {
+                    items,
+                    totalItems,
+                };
+            });
     }
 
     async findOne(
@@ -93,10 +103,12 @@ export class PromotionService {
         adjustmentSourceId: ID,
         relations: RelationPaths<Promotion> = [],
     ): Promise<Promotion | undefined> {
-        return this.connection.findOneInChannel(ctx, Promotion, adjustmentSourceId, ctx.channelId, {
-            where: { deletedAt: null },
-            relations,
-        });
+        return this.connection
+            .findOneInChannel(ctx, Promotion, adjustmentSourceId, ctx.channelId, {
+                where: { deletedAt: IsNull() },
+                relations,
+            })
+            .then(promotion => (promotion && this.translator.translate(promotion, ctx)) ?? undefined);
     }
 
     getPromotionConditions(ctx: RequestContext): ConfigurableOperationDefinition[] {
@@ -116,29 +128,28 @@ export class PromotionService {
         );
         const actions = input.actions.map(a => this.configArgService.parseInput('PromotionAction', a));
         this.validateRequiredConditions(conditions, actions);
-        const promotion = new Promotion({
-            name: input.name,
-            enabled: input.enabled,
-            couponCode: input.couponCode,
-            perCustomerUsageLimit: input.perCustomerUsageLimit,
-            startsAt: input.startsAt,
-            endsAt: input.endsAt,
-            conditions,
-            actions,
-            priorityScore: this.calculatePriorityScore(input),
-        });
-        if (promotion.conditions.length === 0 && !promotion.couponCode) {
+        if (conditions.length === 0 && !input.couponCode) {
             return new MissingConditionsError();
         }
-        await this.channelService.assignToCurrentChannel(promotion, ctx);
-        const newPromotion = await this.connection.getRepository(ctx, Promotion).save(promotion);
+        const newPromotion = await this.translatableSaver.create({
+            ctx,
+            input,
+            entityType: Promotion,
+            translationType: PromotionTranslation,
+            beforeSave: async p => {
+                p.priorityScore = this.calculatePriorityScore(input);
+                p.conditions = conditions;
+                p.actions = actions;
+                await this.channelService.assignToCurrentChannel(p, ctx);
+            },
+        });
         const promotionWithRelations = await this.customFieldRelationService.updateRelations(
             ctx,
             Promotion,
             input,
             newPromotion,
         );
-        this.eventBus.publish(new PromotionEvent(ctx, promotionWithRelations, 'created', input));
+        await this.eventBus.publish(new PromotionEvent(ctx, promotionWithRelations, 'created', input));
         return assertFound(this.findOne(ctx, newPromotion.id));
     }
 
@@ -149,24 +160,35 @@ export class PromotionService {
         const promotion = await this.connection.getEntityOrThrow(ctx, Promotion, input.id, {
             channelId: ctx.channelId,
         });
-        const updatedPromotion = patchEntity(promotion, omit(input, ['conditions', 'actions']));
-        if (input.conditions) {
-            updatedPromotion.conditions = input.conditions.map(c =>
-                this.configArgService.parseInput('PromotionCondition', c),
-            );
-        }
-        if (input.actions) {
-            updatedPromotion.actions = input.actions.map(a =>
-                this.configArgService.parseInput('PromotionAction', a),
-            );
-        }
-        if (promotion.conditions.length === 0 && !promotion.couponCode) {
+
+        const hasConditions = input.conditions
+            ? input.conditions.length > 0
+            : promotion.conditions.length > 0;
+        const hasCouponCode = input.couponCode != null ? !!input.couponCode : !!promotion.couponCode;
+        if (!hasConditions && !hasCouponCode) {
             return new MissingConditionsError();
         }
-        promotion.priorityScore = this.calculatePriorityScore(input);
-        await this.connection.getRepository(ctx, Promotion).save(updatedPromotion, { reload: false });
+        const updatedPromotion = await this.translatableSaver.update({
+            ctx,
+            input,
+            entityType: Promotion,
+            translationType: PromotionTranslation,
+            beforeSave: async p => {
+                p.priorityScore = this.calculatePriorityScore(input);
+                if (input.conditions) {
+                    p.conditions = input.conditions.map(c =>
+                        this.configArgService.parseInput('PromotionCondition', c),
+                    );
+                }
+                if (input.actions) {
+                    p.actions = input.actions.map(a =>
+                        this.configArgService.parseInput('PromotionAction', a),
+                    );
+                }
+            },
+        });
         await this.customFieldRelationService.updateRelations(ctx, Promotion, input, updatedPromotion);
-        this.eventBus.publish(new PromotionEvent(ctx, promotion, 'updated', input));
+        await this.eventBus.publish(new PromotionEvent(ctx, updatedPromotion, 'updated', input));
         return assertFound(this.findOne(ctx, updatedPromotion.id));
     }
 
@@ -175,7 +197,7 @@ export class PromotionService {
         await this.connection
             .getRepository(ctx, Promotion)
             .update({ id: promotionId }, { deletedAt: new Date() });
-        this.eventBus.publish(new PromotionEvent(ctx, promotion, 'deleted', promotionId));
+        await this.eventBus.publish(new PromotionEvent(ctx, promotion, 'deleted', promotionId));
 
         return {
             result: DeletionResult.DELETED,
@@ -186,10 +208,6 @@ export class PromotionService {
         ctx: RequestContext,
         input: AssignPromotionsToChannelInput,
     ): Promise<Promotion[]> {
-        const defaultChannel = await this.channelService.getDefaultChannel(ctx);
-        if (!idsAreEqual(ctx.channelId, defaultChannel.id)) {
-            throw new IllegalOperationError(`promotion-channels-can-only-be-changed-from-default-channel`);
-        }
         const promotions = await this.connection.findByIdsInChannel(
             ctx,
             Promotion,
@@ -200,14 +218,10 @@ export class PromotionService {
         for (const promotion of promotions) {
             await this.channelService.assignToChannels(ctx, Promotion, promotion.id, [input.channelId]);
         }
-        return promotions;
+        return promotions.map(p => this.translator.translate(p, ctx));
     }
 
     async removePromotionsFromChannel(ctx: RequestContext, input: RemovePromotionsFromChannelInput) {
-        const defaultChannel = await this.channelService.getDefaultChannel(ctx);
-        if (!idsAreEqual(ctx.channelId, defaultChannel.id)) {
-            throw new IllegalOperationError(`promotion-channels-can-only-be-changed-from-default-channel`);
-        }
         const promotions = await this.connection.findByIdsInChannel(
             ctx,
             Promotion,
@@ -218,7 +232,7 @@ export class PromotionService {
         for (const promotion of promotions) {
             await this.channelService.removeFromChannels(ctx, Promotion, promotion.id, [input.channelId]);
         }
-        return promotions;
+        return promotions.map(p => this.translator.translate(p, ctx));
     }
 
     /**
@@ -236,7 +250,8 @@ export class PromotionService {
             where: {
                 couponCode,
                 enabled: true,
-                deletedAt: null,
+                deletedAt: IsNull(),
+                channels: { id: ctx.channelId },
             },
             relations: ['channels'],
         });
@@ -245,15 +260,21 @@ export class PromotionService {
             promotion.couponCode !== couponCode ||
             !promotion.channels.find(c => idsAreEqual(c.id, ctx.channelId))
         ) {
-            return new CouponCodeInvalidError(couponCode);
+            return new CouponCodeInvalidError({ couponCode });
         }
         if (promotion.endsAt && +promotion.endsAt < +new Date()) {
-            return new CouponCodeExpiredError(couponCode);
+            return new CouponCodeExpiredError({ couponCode });
         }
         if (customerId && promotion.perCustomerUsageLimit != null) {
             const usageCount = await this.countPromotionUsagesForCustomer(ctx, promotion.id, customerId);
             if (promotion.perCustomerUsageLimit <= usageCount) {
-                return new CouponCodeLimitError(couponCode, promotion.perCustomerUsageLimit);
+                return new CouponCodeLimitError({ couponCode, limit: promotion.perCustomerUsageLimit });
+            }
+        }
+        if (promotion.usageLimit !== null) {
+            const usageCount = await this.countPromotionUsages(ctx, promotion.id);
+            if (promotion.usageLimit <= usageCount) {
+                return new CouponCodeLimitError({ couponCode, limit: promotion.usageLimit });
             }
         }
         return promotion;
@@ -264,11 +285,13 @@ export class PromotionService {
             .getRepository(ctx, Promotion)
             .createQueryBuilder('promotion')
             .leftJoin('promotion.channels', 'channel')
+            .leftJoinAndSelect('promotion.translations', 'translation')
             .where('channel.id = :channelId', { channelId: ctx.channelId })
             .andWhere('promotion.deletedAt IS NULL')
             .andWhere('promotion.enabled = :enabled', { enabled: true })
             .orderBy('promotion.priorityScore', 'ASC')
-            .getMany();
+            .getMany()
+            .then(promotions => promotions.map(p => this.translator.translate(p, ctx)));
     }
 
     async getActivePromotionsOnOrder(ctx: RequestContext, orderId: ID): Promise<Promotion[]> {
@@ -308,7 +331,9 @@ export class PromotionService {
             a => AdjustmentSource.decodeSourceId(a.adjustmentSource).id,
         );
         const promotionIds = unique(allPromotionIds);
-        const promotions = await this.connection.getRepository(ctx, Promotion).findByIds(promotionIds);
+        const promotions = await this.connection
+            .getRepository(ctx, Promotion)
+            .find({ where: { id: In(promotionIds) } });
         order.promotions = promotions;
         return this.connection.getRepository(ctx, Order).save(order);
     }
@@ -325,7 +350,21 @@ export class PromotionService {
             .where('promotion.id = :promotionId', { promotionId })
             .andWhere('order.customer = :customerId', { customerId })
             .andWhere('order.state != :state', { state: 'Cancelled' as OrderState })
-            .andWhere('order.active = :active', { active: false });
+            .andWhere('order.active = :active', { active: false })
+            .andWhere('order.type != :type', { type: OrderType.Seller });
+
+        return qb.getCount();
+    }
+
+    private async countPromotionUsages(ctx: RequestContext, promotionId: ID): Promise<number> {
+        const qb = this.connection
+            .getRepository(ctx, Order)
+            .createQueryBuilder('order')
+            .leftJoin('order.promotions', 'promotion')
+            .where('promotion.id = :promotionId', { promotionId })
+            .andWhere('order.state != :state', { state: 'Cancelled' as OrderState })
+            .andWhere('order.active = :active', { active: false })
+            .andWhere('order.type != :type', { type: OrderType.Seller });
 
         return qb.getCount();
     }

@@ -1,35 +1,25 @@
 import { AdminUiPlugin } from '@vendure/admin-ui-plugin';
-import {
-    ChannelService,
-    DefaultLogger,
-    DefaultSearchPlugin,
-    Logger,
-    LogLevel,
-    mergeConfig,
-    OrderService,
-    PaymentService,
-    RequestContext,
-} from '@vendure/core';
+import { DefaultLogger, DefaultSearchPlugin, LanguageCode, LogLevel, mergeConfig } from '@vendure/core';
 import { createTestEnvironment, registerInitializer, SqljsInitializer, testConfig } from '@vendure/testing';
 import gql from 'graphql-tag';
 import localtunnel from 'localtunnel';
 import path from 'path';
 
 import { initialData } from '../../../e2e-common/e2e-initial-data';
-import { MolliePlugin } from '../package/mollie';
 import { molliePaymentHandler } from '../package/mollie/mollie.handler';
+import { MolliePlugin } from '../src/mollie';
 
 import { CREATE_PAYMENT_METHOD } from './graphql/admin-queries';
-import { CreatePaymentMethod } from './graphql/generated-admin-types';
-import { AddItemToOrder } from './graphql/generated-shop-types';
-import { ADD_ITEM_TO_ORDER } from './graphql/shop-queries';
-import { CREATE_MOLLIE_PAYMENT_INTENT, setShipping } from './payment-helpers';
+import { ADD_ITEM_TO_ORDER, APPLY_COUPON_CODE } from './graphql/shop-queries';
+import { setShipping } from './payment-helpers';
 
 /**
  * This should only be used to locally test the Mollie payment plugin
+ * Make sure you have `MOLLIE_APIKEY=test_xxxx` in your .env file
  */
-/* tslint:disable:no-floating-promises */
-(async () => {
+/* eslint-disable @typescript-eslint/no-floating-promises */
+async function runMollieDevServer() {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
     require('dotenv').config();
 
     registerInitializer('sqljs', new SqljsInitializer(path.join(__dirname, '__data__')));
@@ -48,7 +38,7 @@ import { CREATE_MOLLIE_PAYMENT_INTENT, setShipping } from './payment-helpers';
         apiOptions: {
             adminApiPlayground: true,
             shopApiPlayground: true,
-        }
+        },
     });
     const { server, shopClient, adminClient } = createTestEnvironment(config as any);
     await server.init({
@@ -60,67 +50,69 @@ import { CREATE_MOLLIE_PAYMENT_INTENT, setShipping } from './payment-helpers';
     await adminClient.asSuperAdmin();
     await adminClient.query(gql`
         mutation {
-            updateChannel(input: {id: "T_1", currencyCode: EUR}) {
+            updateChannel(input: { id: "T_1", currencyCode: EUR }) {
                 __typename
             }
         }
     `);
     // Create method
-    await adminClient.query<CreatePaymentMethod.Mutation,
-        CreatePaymentMethod.Variables>(CREATE_PAYMENT_METHOD, {
+    await adminClient.query(CREATE_PAYMENT_METHOD, {
         input: {
             code: 'mollie',
-            name: 'Mollie payment test',
-            description: 'This is a Mollie test payment method',
+            translations: [
+                {
+                    languageCode: LanguageCode.en,
+                    name: 'Mollie payment test',
+                    description: 'This is a Mollie test payment method',
+                },
+            ],
             enabled: true,
             handler: {
                 code: molliePaymentHandler.code,
                 arguments: [
-                    { name: 'redirectUrl', value: `${tunnel.url}/admin/orders?filter=open&page=1` },
-                    // tslint:disable-next-line:no-non-null-assertion
+                    {
+                        name: 'redirectUrl',
+                        value: `${tunnel.url}/admin/orders?filter=open&page=1`,
+                    },
+                    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
                     { name: 'apiKey', value: process.env.MOLLIE_APIKEY! },
-                    { name: 'autoCapture', value: 'false' },
                 ],
             },
         },
     });
-    // Prepare order for payment
+    // Prepare a test order where the total is 0
     await shopClient.asUserWithCredentials('hayden.zieme12@hotmail.com', 'test');
-    await shopClient.query<AddItemToOrder.Order, AddItemToOrder.Variables>(ADD_ITEM_TO_ORDER, {
-        productVariantId: 'T_5',
-        quantity: 10,
-    });
-    const ctx = new RequestContext({
-        apiType: 'admin',
-        isAuthorized: true,
-        authorizedAsOwnerOnly: false,
-        channel: await server.app.get(ChannelService).getDefaultChannel()
-    });
-   await server.app.get(OrderService).addSurchargeToOrder(ctx, 1, {
-        description: 'Negative test surcharge',
-        listPrice: -20000,
+    await shopClient.query(ADD_ITEM_TO_ORDER, {
+        productVariantId: 'T_1',
+        quantity: 1,
     });
     await setShipping(shopClient);
-    // Add pre payment to order
-    const order = await server.app.get(OrderService).findOne(ctx, 1);
-    // tslint:disable-next-line:no-non-null-assertion
-    await server.app.get(PaymentService).createManualPayment(ctx, order!, 10000 ,{
-        method: 'Manual',
-        // tslint:disable-next-line:no-non-null-assertion
-        orderId: order!.id,
-        metadata: {
-            bogus: 'test'
-        }
-    });
-    const { createMolliePaymentIntent } = await shopClient.query(CREATE_MOLLIE_PAYMENT_INTENT, {
+    await shopClient.query(APPLY_COUPON_CODE, { couponCode: 'FREE_SHIPPING' });
+
+    // Create Payment Intent
+    const result = await shopClient.query(CREATE_MOLLIE_PAYMENT_INTENT, {
         input: {
-            paymentMethodCode: 'mollie',
-//            molliePaymentMethodCode: 'klarnapaylater'
+            locale: 'nl_NL',
+            immediateCapture: false,
         },
     });
-    if (createMolliePaymentIntent.errorCode) {
-        throw createMolliePaymentIntent;
-    }
-    Logger.info(`Mollie payment link: ${createMolliePaymentIntent.url}`, 'Mollie DevServer');
+    // eslint-disable-next-line no-console
+    console.log('Payment intent result', result);
+
+    // Uncomme this line to disable webhook processing and test the `syncMolliePaymentStatus` mutation
+    // MolliePlugin.options.disableWebhookProcessing = true;
+}
+
+(async () => {
+    await runMollieDevServer();
 })();
 
+const CREATE_MOLLIE_PAYMENT_INTENT = gql`
+    mutation createMolliePaymentIntent($input: MolliePaymentIntentInput!) {
+        createMolliePaymentIntent(input: $input) {
+            ... on MolliePaymentIntent {
+                url
+            }
+        }
+    }
+`;

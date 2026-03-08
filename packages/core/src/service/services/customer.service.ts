@@ -10,7 +10,7 @@ import {
     CreateAddressInput,
     CreateCustomerInput,
     CreateCustomerResult,
-    CustomerListOptions,
+    CustomerFilterParameter,
     DeletionResponse,
     DeletionResult,
     HistoryEntryType,
@@ -21,9 +21,10 @@ import {
     UpdateCustomerResult,
 } from '@vendure/common/lib/generated-types';
 import { ID, PaginatedList } from '@vendure/common/lib/shared-types';
+import { IsNull } from 'typeorm';
 
 import { RequestContext } from '../../api/common/request-context';
-import { RelationPaths } from '../../api/index';
+import { RelationPaths } from '../../api/decorators/relations.decorator';
 import { ErrorResultUnion, isGraphQlErrorResult } from '../../common/error/error-result';
 import { EntityNotFoundError, InternalServerError } from '../../common/error/errors';
 import { EmailAddressConflictError as EmailAddressConflictAdminError } from '../../common/error/generated-graphql-admin-errors';
@@ -36,6 +37,7 @@ import {
     PasswordResetTokenInvalidError,
     PasswordValidationError,
 } from '../../common/error/generated-graphql-shop-errors';
+import { Instrument } from '../../common/instrument-decorator';
 import { ListQueryOptions } from '../../common/types/common-types';
 import { assertFound, idsAreEqual, normalizeEmailAddress } from '../../common/utils';
 import { NATIVE_AUTH_STRATEGY_NAME } from '../../config/auth/native-authentication-strategy';
@@ -47,7 +49,7 @@ import { Channel } from '../../entity/channel/channel.entity';
 import { CustomerGroup } from '../../entity/customer-group/customer-group.entity';
 import { Customer } from '../../entity/customer/customer.entity';
 import { HistoryEntry } from '../../entity/history-entry/history-entry.entity';
-import { Order } from '../../entity/index';
+import { Order } from '../../entity/order/order.entity';
 import { User } from '../../entity/user/user.entity';
 import { EventBus } from '../../event-bus/event-bus';
 import { AccountRegistrationEvent } from '../../event-bus/events/account-registration-event';
@@ -76,6 +78,7 @@ import { UserService } from './user.service';
  * @docsCategory services
  */
 @Injectable()
+@Instrument()
 export class CustomerService {
     constructor(
         private connection: TransactionalConnection,
@@ -96,7 +99,10 @@ export class CustomerService {
         relations: RelationPaths<Customer> = [],
     ): Promise<PaginatedList<Customer>> {
         const customPropertyMap: { [name: string]: string } = {};
-        const hasPostalCodeFilter = !!(options as CustomerListOptions)?.filter?.postalCode;
+        const hasPostalCodeFilter = this.listQueryBuilder.filterObjectHasProperty<CustomerFilterParameter>(
+            options?.filter,
+            'postalCode',
+        );
         if (hasPostalCodeFilter) {
             relations.push('addresses');
             customPropertyMap.postalCode = 'addresses.postalCode';
@@ -105,7 +111,7 @@ export class CustomerService {
             .build(Customer, options, {
                 relations,
                 channelId: ctx.channelId,
-                where: { deletedAt: null },
+                where: { deletedAt: IsNull() },
                 ctx,
                 customPropertyMap,
             })
@@ -118,10 +124,12 @@ export class CustomerService {
         id: ID,
         relations: RelationPaths<Customer> = [],
     ): Promise<Customer | undefined> {
-        return this.connection.findOneInChannel(ctx, Customer, id, ctx.channelId, {
-            relations,
-            where: { deletedAt: null },
-        });
+        return this.connection
+            .findOneInChannel(ctx, Customer, id, ctx.channelId, {
+                relations,
+                where: { deletedAt: IsNull() },
+            })
+            .then(result => result ?? undefined);
     }
 
     /**
@@ -141,7 +149,7 @@ export class CustomerService {
         if (filterOnChannel) {
             query = query.andWhere('channel.id = :channelId', { channelId: ctx.channelId });
         }
-        return query.getOne();
+        return query.getOne().then(result => result ?? undefined);
     }
 
     /**
@@ -177,7 +185,7 @@ export class CustomerService {
             {
                 relations: ['groups'],
                 where: {
-                    deletedAt: null,
+                    deletedAt: IsNull(),
                 },
             },
         );
@@ -224,7 +232,7 @@ export class CustomerService {
             relations: ['channels'],
             where: {
                 emailAddress: input.emailAddress,
-                deletedAt: null,
+                deletedAt: IsNull(),
             },
         });
         const existingUser = await this.userService.getUserByEmailAddress(
@@ -260,9 +268,8 @@ export class CustomerService {
                     customer.user = result;
                 }
             }
-        } else {
-            this.eventBus.publish(new AccountRegistrationEvent(ctx, customer.user));
         }
+        await this.eventBus.publish(new AccountRegistrationEvent(ctx, customer.user));
         await this.channelService.assignToCurrentChannel(customer, ctx);
         const createdCustomer = await this.connection.getRepository(ctx, Customer).save(customer);
         await this.customFieldRelationService.updateRelations(ctx, Customer, input, createdCustomer);
@@ -285,7 +292,7 @@ export class CustomerService {
                 },
             });
         }
-        this.eventBus.publish(new CustomerEvent(ctx, createdCustomer, 'created', input));
+        await this.eventBus.publish(new CustomerEvent(ctx, createdCustomer, 'created', input));
         return createdCustomer;
     }
 
@@ -306,13 +313,16 @@ export class CustomerService {
         });
 
         if (hasEmailAddress(input)) {
+            input.emailAddress = normalizeEmailAddress(input.emailAddress);
             if (input.emailAddress !== customer.emailAddress) {
                 const existingCustomerInChannel = await this.connection
                     .getRepository(ctx, Customer)
                     .createQueryBuilder('customer')
                     .leftJoin('customer.channels', 'channel')
                     .where('channel.id = :channelId', { channelId: ctx.channelId })
-                    .andWhere('customer.emailAddress = :emailAddress', { emailAddress: input.emailAddress })
+                    .andWhere('customer.emailAddress = :emailAddress', {
+                        emailAddress: input.emailAddress,
+                    })
                     .andWhere('customer.id != :customerId', { customerId: input.id })
                     .andWhere('customer.deletedAt is null')
                     .getOne();
@@ -335,7 +345,11 @@ export class CustomerService {
                         return new EmailAddressConflictAdminError();
                     }
 
-                    await this.userService.changeNativeIdentifier(ctx, customer.user.id, input.emailAddress);
+                    await this.userService.changeUserAndNativeIdentifier(
+                        ctx,
+                        customer.user.id,
+                        input.emailAddress,
+                    );
                 }
             }
         }
@@ -351,7 +365,7 @@ export class CustomerService {
                 input,
             },
         });
-        this.eventBus.publish(new CustomerEvent(ctx, customer, 'updated', input));
+        await this.eventBus.publish(new CustomerEvent(ctx, customer, 'updated', input));
         return assertFound(this.findOne(ctx, customer.id));
     }
 
@@ -436,7 +450,7 @@ export class CustomerService {
         await this.connection.getRepository(ctx, User).save(user, { reload: false });
         await this.connection.getRepository(ctx, Customer).save(customer, { reload: false });
         if (!user.verified) {
-            this.eventBus.publish(new AccountRegistrationEvent(ctx, user));
+            await this.eventBus.publish(new AccountRegistrationEvent(ctx, user));
         } else {
             await this.historyService.createHistoryEntryForCustomer({
                 customerId: customer.id,
@@ -459,7 +473,7 @@ export class CustomerService {
         const user = await this.userService.getUserByEmailAddress(ctx, emailAddress);
         if (user && !user.verified) {
             await this.userService.setVerificationToken(ctx, user);
-            this.eventBus.publish(new AccountRegistrationEvent(ctx, user));
+            await this.eventBus.publish(new AccountRegistrationEvent(ctx, user));
         }
     }
 
@@ -493,7 +507,7 @@ export class CustomerService {
             },
         });
         const user = assertFound(this.findOneByUserId(ctx, result.id));
-        this.eventBus.publish(new AccountVerifiedEvent(ctx, customer));
+        await this.eventBus.publish(new AccountVerifiedEvent(ctx, customer));
         return user;
     }
 
@@ -505,7 +519,7 @@ export class CustomerService {
     async requestPasswordReset(ctx: RequestContext, emailAddress: string): Promise<void> {
         const user = await this.userService.setPasswordResetToken(ctx, emailAddress);
         if (user) {
-            this.eventBus.publish(new PasswordResetEvent(ctx, user));
+            await this.eventBus.publish(new PasswordResetEvent(ctx, user));
             const customer = await this.findOneByUserId(ctx, user.id);
             if (!customer) {
                 throw new InternalServerError('error.cannot-locate-customer-for-user');
@@ -545,7 +559,7 @@ export class CustomerService {
             type: HistoryEntryType.CUSTOMER_PASSWORD_RESET_VERIFIED,
             data: {},
         });
-        this.eventBus.publish(new PasswordResetVerifiedEvent(ctx, result));
+        await this.eventBus.publish(new PasswordResetVerifiedEvent(ctx, result));
         return result;
     }
 
@@ -560,6 +574,7 @@ export class CustomerService {
         userId: ID,
         newEmailAddress: string,
     ): Promise<boolean | EmailAddressConflictError> {
+        const normalizedEmailAddress = normalizeEmailAddress(newEmailAddress);
         const userWithConflictingIdentifier = await this.userService.getUserByEmailAddress(
             ctx,
             newEmailAddress,
@@ -582,28 +597,28 @@ export class CustomerService {
             type: HistoryEntryType.CUSTOMER_EMAIL_UPDATE_REQUESTED,
             data: {
                 oldEmailAddress,
-                newEmailAddress,
+                newEmailAddress: normalizedEmailAddress,
             },
         });
         if (this.configService.authOptions.requireVerification) {
-            user.getNativeAuthenticationMethod().pendingIdentifier = newEmailAddress;
+            user.getNativeAuthenticationMethod().pendingIdentifier = normalizedEmailAddress;
             await this.userService.setIdentifierChangeToken(ctx, user);
-            this.eventBus.publish(new IdentifierChangeRequestEvent(ctx, user));
+            await this.eventBus.publish(new IdentifierChangeRequestEvent(ctx, user));
             return true;
         } else {
             const oldIdentifier = user.identifier;
-            user.identifier = newEmailAddress;
-            customer.emailAddress = newEmailAddress;
+            user.identifier = normalizedEmailAddress;
+            customer.emailAddress = normalizedEmailAddress;
             await this.connection.getRepository(ctx, User).save(user, { reload: false });
             await this.connection.getRepository(ctx, Customer).save(customer, { reload: false });
-            this.eventBus.publish(new IdentifierChangeEvent(ctx, user, oldIdentifier));
+            await this.eventBus.publish(new IdentifierChangeEvent(ctx, user, oldIdentifier));
             await this.historyService.createHistoryEntryForCustomer({
                 customerId: customer.id,
                 ctx,
                 type: HistoryEntryType.CUSTOMER_EMAIL_UPDATE_VERIFIED,
                 data: {
                     oldEmailAddress,
-                    newEmailAddress,
+                    newEmailAddress: normalizedEmailAddress,
                 },
             });
             return true;
@@ -631,7 +646,7 @@ export class CustomerService {
         if (!customer) {
             return false;
         }
-        this.eventBus.publish(new IdentifierChangeEvent(ctx, user, oldIdentifier));
+        await this.eventBus.publish(new IdentifierChangeEvent(ctx, user, oldIdentifier));
         customer.emailAddress = user.identifier;
         await this.connection.getRepository(ctx, Customer).save(customer, { reload: false });
         await this.historyService.createHistoryEntryForCustomer({
@@ -661,7 +676,7 @@ export class CustomerService {
             relations: ['channels'],
             where: {
                 emailAddress: input.emailAddress,
-                deletedAt: null,
+                deletedAt: IsNull(),
             },
         });
         if (existing) {
@@ -674,7 +689,7 @@ export class CustomerService {
         } else {
             customer = await this.connection.getRepository(ctx, Customer).save(new Customer(input));
             await this.channelService.assignToCurrentChannel(customer, ctx);
-            this.eventBus.publish(new CustomerEvent(ctx, customer, 'created', input));
+            await this.eventBus.publish(new CustomerEvent(ctx, customer, 'created', input));
         }
         return this.connection.getRepository(ctx, Customer).save(customer);
     }
@@ -685,7 +700,7 @@ export class CustomerService {
      */
     async createAddress(ctx: RequestContext, customerId: ID, input: CreateAddressInput): Promise<Address> {
         const customer = await this.connection.getEntityOrThrow(ctx, Customer, customerId, {
-            where: { deletedAt: null },
+            where: { deletedAt: IsNull() },
             relations: ['addresses'],
             channelId: ctx.channelId,
         });
@@ -707,7 +722,7 @@ export class CustomerService {
             data: { address: addressToLine(createdAddress) },
         });
         createdAddress.customer = customer;
-        this.eventBus.publish(new CustomerAddressEvent(ctx, createdAddress, 'created', input));
+        await this.eventBus.publish(new CustomerAddressEvent(ctx, createdAddress, 'created', input));
         return createdAddress;
     }
 
@@ -744,7 +759,7 @@ export class CustomerService {
             },
         });
         updatedAddress.customer = customer;
-        this.eventBus.publish(new CustomerAddressEvent(ctx, updatedAddress, 'updated', input));
+        await this.eventBus.publish(new CustomerAddressEvent(ctx, updatedAddress, 'updated', input));
         return updatedAddress;
     }
 
@@ -774,7 +789,7 @@ export class CustomerService {
         const deletedAddress = new Address(address);
         await this.connection.getRepository(ctx, Address).remove(address);
         address.customer = customer;
-        this.eventBus.publish(new CustomerAddressEvent(ctx, deletedAddress, 'deleted', id));
+        await this.eventBus.publish(new CustomerAddressEvent(ctx, deletedAddress, 'deleted', id));
         return true;
     }
 
@@ -785,11 +800,11 @@ export class CustomerService {
         await this.connection
             .getRepository(ctx, Customer)
             .update({ id: customerId }, { deletedAt: new Date() });
-        // tslint:disable-next-line:no-non-null-assertion
+        // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
         if (customer.user) {
             await this.userService.softDelete(ctx, customer.user.id);
         }
-        this.eventBus.publish(new CustomerEvent(ctx, customer, 'deleted', customerId));
+        await this.eventBus.publish(new CustomerEvent(ctx, customer, 'deleted', customerId));
         return {
             result: DeletionResult.DELETED,
         };
@@ -879,7 +894,7 @@ export class CustomerService {
             return {
                 result: DeletionResult.DELETED,
             };
-        } catch (e) {
+        } catch (e: any) {
             return {
                 result: DeletionResult.NOT_DELETED,
                 message: e.message,
@@ -894,7 +909,7 @@ export class CustomerService {
     ) {
         const result = await this.connection
             .getRepository(ctx, Address)
-            .findOne(addressId, { relations: ['customer', 'customer.addresses'] });
+            .findOne({ where: { id: addressId }, relations: ['customer', 'customer.addresses'] });
         if (result) {
             const customerAddressIds = result.customer.addresses
                 .map(a => a.id)
@@ -926,7 +941,7 @@ export class CustomerService {
         }
         const result = await this.connection
             .getRepository(ctx, Address)
-            .findOne(addressToDelete.id, { relations: ['customer', 'customer.addresses'] });
+            .findOne({ where: { id: addressToDelete.id }, relations: ['customer', 'customer.addresses'] });
         if (result) {
             const customerAddresses = result.customer.addresses;
             if (1 < customerAddresses.length) {

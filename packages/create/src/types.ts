@@ -1,4 +1,4 @@
-export type DbType = 'mysql' | 'mariadb' | 'postgres' | 'sqlite' | 'sqljs' | 'mssql' | 'oracle';
+export type DbType = 'mysql' | 'mariadb' | 'postgres' | 'sqlite';
 
 export interface FileSources {
     indexSource: string;
@@ -6,10 +6,11 @@ export interface FileSources {
     configSource: string;
     envSource: string;
     envDtsSource: string;
-    migrationSource: string;
     readmeSource: string;
     dockerfileSource: string;
     dockerComposeSource: string;
+    tsconfigDashboardSource: string;
+    viteConfigSource: string;
 }
 
 export interface UserResponses extends FileSources {
@@ -17,6 +18,9 @@ export interface UserResponses extends FileSources {
     populateProducts: boolean;
     superadminIdentifier: string;
     superadminPassword: string;
+    includeStorefront: boolean;
 }
+
+export type PackageManager = 'npm';
 
 export type CliLogLevel = 'silent' | 'info' | 'verbose';

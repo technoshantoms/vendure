@@ -1,56 +1,60 @@
-/* tslint:disable:no-non-null-assertion */
+/* eslint-disable @typescript-eslint/no-non-null-assertion */
+import { CurrencyCode, LanguageCode } from '@vendure/common/lib/generated-types';
 import { EntityHydrator, mergeConfig } from '@vendure/core';
-import { CreateProduct, CreateProductVariants } from '@vendure/core/e2e/graphql/generated-e2e-admin-types';
-import { CREATE_PRODUCT, CREATE_PRODUCT_VARIANTS } from '@vendure/core/e2e/graphql/shared-definitions';
-import { createTestEnvironment, E2E_DEFAULT_CHANNEL_TOKEN } from '@vendure/testing';
-import gql from 'graphql-tag';
+import { testCreateStockLocationDocument } from '@vendure/core/e2e/graphql/admin-definitions';
+import {
+    createProductDocument,
+    createProductVariantsDocument,
+} from '@vendure/core/e2e/graphql/shared-definitions';
+import {
+    createErrorResultGuard,
+    createTestEnvironment,
+    E2E_DEFAULT_CHANNEL_TOKEN,
+    ErrorResultGuard,
+} from '@vendure/testing';
 import nock from 'nock';
+import fetch from 'node-fetch';
 import path from 'path';
+import { Stripe } from 'stripe';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { initialData } from '../../../e2e-common/e2e-initial-data';
-import { testConfig, TEST_SETUP_TIMEOUT_MS } from '../../../e2e-common/test-config';
+import { TEST_SETUP_TIMEOUT_MS, testConfig } from '../../../e2e-common/test-config';
 import { StripePlugin } from '../src/stripe';
 import { stripePaymentMethodHandler } from '../src/stripe/stripe.handler';
 
-import { CREATE_CHANNEL, CREATE_PAYMENT_METHOD, GET_CUSTOMER_LIST } from './graphql/admin-queries';
 import {
-    CreateChannelMutation,
-    CreateChannelMutationVariables,
-    CreatePaymentMethod,
-    CurrencyCode,
-    GetCustomerList,
-    GetCustomerListQuery,
-    LanguageCode,
-} from './graphql/generated-admin-types';
+    createChannelDocument,
+    createPaymentMethodDocument,
+    getCustomerListDocument,
+} from './graphql/admin-definitions';
+import { ResultOf } from './graphql/graphql-admin';
+import { FragmentOf } from './graphql/graphql-shop';
+import { createStripePaymentIntentDocument } from './graphql/shared-definitions';
 import {
-    AddItemToOrder,
-    GetActiveOrderQuery,
-    TestOrderFragmentFragment,
-} from './graphql/generated-shop-types';
-import { ADD_ITEM_TO_ORDER, GET_ACTIVE_ORDER } from './graphql/shop-queries';
+    addItemToOrderDocument,
+    getActiveOrderDocument,
+    testOrderFragment,
+} from './graphql/shop-definitions';
 import { setShipping } from './payment-helpers';
-
-export const CREATE_STRIPE_PAYMENT_INTENT = gql`
-    mutation createStripePaymentIntent {
-        createStripePaymentIntent
-    }
-`;
 
 describe('Stripe payments', () => {
     const devConfig = mergeConfig(testConfig(), {
         plugins: [
             StripePlugin.init({
-                apiKey: 'test-api-key',
-                webhookSigningSecret: 'test-signing-secret',
                 storeCustomersInStripe: true,
             }),
         ],
     });
     const { shopClient, adminClient, server } = createTestEnvironment(devConfig);
     let started = false;
-    let customers: GetCustomerListQuery['customers']['items'];
-    let order: TestOrderFragmentFragment;
+    let customers: ResultOf<typeof getCustomerListDocument>['customers']['items'];
+    let order: FragmentOf<typeof testOrderFragment>;
     let serverPort: number;
+
+    const orderGuard: ErrorResultGuard<FragmentOf<typeof testOrderFragment>> = createErrorResultGuard(
+        input => !!input.lines,
+    );
     beforeAll(async () => {
         serverPort = devConfig.apiOptions.port;
         await server.init({
@@ -62,7 +66,7 @@ describe('Stripe payments', () => {
         await adminClient.asSuperAdmin();
         ({
             customers: { items: customers },
-        } = await adminClient.query<GetCustomerList.Query, GetCustomerList.Variables>(GET_CUSTOMER_LIST, {
+        } = await adminClient.query(getCustomerListDocument, {
             options: {
                 take: 2,
             },
@@ -73,37 +77,40 @@ describe('Stripe payments', () => {
         await server.destroy();
     });
 
-    it('Should start successfully', async () => {
+    it('Should start successfully', () => {
         expect(started).toEqual(true);
         expect(customers).toHaveLength(2);
     });
 
     it('Should prepare an order', async () => {
         await shopClient.asUserWithCredentials(customers[0].emailAddress, 'test');
-        const { addItemToOrder } = await shopClient.query<AddItemToOrder.Mutation, AddItemToOrder.Variables>(
-            ADD_ITEM_TO_ORDER,
-            {
-                productVariantId: 'T_1',
-                quantity: 2,
-            },
-        );
-        order = addItemToOrder as TestOrderFragmentFragment;
+        const { addItemToOrder } = await shopClient.query(addItemToOrderDocument, {
+            productVariantId: 'T_1',
+            quantity: 2,
+        });
+        orderGuard.assertSuccess(addItemToOrder);
+        order = addItemToOrder;
         expect(order.code).toBeDefined();
     });
 
     it('Should add a Stripe paymentMethod', async () => {
-        const { createPaymentMethod } = await adminClient.query<
-            CreatePaymentMethod.Mutation,
-            CreatePaymentMethod.Variables
-        >(CREATE_PAYMENT_METHOD, {
+        const { createPaymentMethod } = await adminClient.query(createPaymentMethodDocument, {
             input: {
                 code: `stripe-payment-${E2E_DEFAULT_CHANNEL_TOKEN}`,
-                name: 'Stripe payment test',
-                description: 'This is a Stripe test payment method',
+                translations: [
+                    {
+                        name: 'Stripe payment test',
+                        description: 'This is a Stripe test payment method',
+                        languageCode: LanguageCode.en,
+                    },
+                ],
                 enabled: true,
                 handler: {
                     code: stripePaymentMethodHandler.code,
-                    arguments: [],
+                    arguments: [
+                        { name: 'apiKey', value: 'test-api-key' },
+                        { name: 'webhookSecret', value: 'test-signing-secret' },
+                    ],
                 },
             },
         });
@@ -131,7 +138,7 @@ describe('Stripe payments', () => {
             client_secret: 'test-client-secret',
         });
 
-        const { createStripePaymentIntent } = await shopClient.query(CREATE_STRIPE_PAYMENT_INTENT);
+        const { createStripePaymentIntent } = await shopClient.query(createStripePaymentIntentDocument);
         expect(createCustomerPayload).toEqual({
             email: 'hayden.zieme12@hotmail.com',
             name: 'Hayden Zieme',
@@ -140,7 +147,7 @@ describe('Stripe payments', () => {
 
     it('should send correct payload to create payment intent', async () => {
         let createPaymentIntentPayload: any;
-        const { activeOrder } = await shopClient.query<GetActiveOrderQuery>(GET_ACTIVE_ORDER);
+        const { activeOrder } = await shopClient.query(getActiveOrderDocument);
         nock('https://api.stripe.com/')
             .post('/v1/payment_intents', body => {
                 createPaymentIntentPayload = body;
@@ -149,7 +156,7 @@ describe('Stripe payments', () => {
             .reply(200, {
                 client_secret: 'test-client-secret',
             });
-        const { createStripePaymentIntent } = await shopClient.query(CREATE_STRIPE_PAYMENT_INTENT);
+        const { createStripePaymentIntent } = await shopClient.query(createStripePaymentIntentDocument);
         expect(createPaymentIntentPayload).toEqual({
             amount: activeOrder?.totalWithTax.toString(),
             currency: activeOrder?.currencyCode?.toLowerCase(),
@@ -158,21 +165,22 @@ describe('Stripe payments', () => {
             'metadata[channelToken]': E2E_DEFAULT_CHANNEL_TOKEN,
             'metadata[orderId]': '1',
             'metadata[orderCode]': activeOrder?.code,
+            'metadata[languageCode]': 'en',
         });
         expect(createStripePaymentIntent).toEqual('test-client-secret');
     });
 
-    // https://github.com/vendure-ecommerce/vendure/issues/1935
+    // https://github.com/vendurehq/vendure/issues/1935
     it('should attach metadata to stripe payment intent', async () => {
         StripePlugin.options.metadata = async (injector, ctx, currentOrder) => {
-            const hydrator = await injector.get(EntityHydrator);
+            const hydrator = injector.get(EntityHydrator);
             await hydrator.hydrate(ctx, currentOrder, { relations: ['customer'] });
             return {
                 customerEmail: currentOrder.customer?.emailAddress ?? 'demo',
             };
         };
         let createPaymentIntentPayload: any;
-        const { activeOrder } = await shopClient.query<GetActiveOrderQuery>(GET_ACTIVE_ORDER);
+        const { activeOrder } = await shopClient.query(getActiveOrderDocument);
         nock('https://api.stripe.com/')
             .post('/v1/payment_intents', body => {
                 createPaymentIntentPayload = body;
@@ -181,7 +189,7 @@ describe('Stripe payments', () => {
             .reply(200, {
                 client_secret: 'test-client-secret',
             });
-        const { createStripePaymentIntent } = await shopClient.query(CREATE_STRIPE_PAYMENT_INTENT);
+        const { createStripePaymentIntent } = await shopClient.query(createStripePaymentIntentDocument);
         expect(createPaymentIntentPayload).toEqual({
             amount: activeOrder?.totalWithTax.toString(),
             currency: activeOrder?.currencyCode?.toLowerCase(),
@@ -190,21 +198,281 @@ describe('Stripe payments', () => {
             'metadata[channelToken]': E2E_DEFAULT_CHANNEL_TOKEN,
             'metadata[orderId]': '1',
             'metadata[orderCode]': activeOrder?.code,
+            'metadata[languageCode]': 'en',
             'metadata[customerEmail]': customers[0].emailAddress,
         });
         expect(createStripePaymentIntent).toEqual('test-client-secret');
         StripePlugin.options.metadata = undefined;
     });
 
-    // https://github.com/vendure-ecommerce/vendure/issues/1630
+    // https://github.com/vendurehq/vendure/issues/2412
+    it('should attach additional params to payment intent using paymentIntentCreateParams', async () => {
+        StripePlugin.options.paymentIntentCreateParams = async (injector, ctx, currentOrder) => {
+            const hydrator = injector.get(EntityHydrator);
+            await hydrator.hydrate(ctx, currentOrder, { relations: ['customer'] });
+            return {
+                description: `Order #${currentOrder.code} for ${currentOrder.customer!.emailAddress}`,
+            };
+        };
+        let createPaymentIntentPayload: any;
+        const { activeOrder } = await shopClient.query(getActiveOrderDocument);
+        nock('https://api.stripe.com/')
+            .post('/v1/payment_intents', body => {
+                createPaymentIntentPayload = body;
+                return true;
+            })
+            .reply(200, {
+                client_secret: 'test-client-secret',
+            });
+        const { createStripePaymentIntent } = await shopClient.query(createStripePaymentIntentDocument);
+        expect(createPaymentIntentPayload).toEqual({
+            amount: activeOrder?.totalWithTax.toString(),
+            currency: activeOrder?.currencyCode?.toLowerCase(),
+            customer: 'new-customer-id',
+            description: `Order #${activeOrder!.code} for ${activeOrder!.customer!.emailAddress}`,
+            'automatic_payment_methods[enabled]': 'true',
+            'metadata[channelToken]': E2E_DEFAULT_CHANNEL_TOKEN,
+            'metadata[languageCode]': 'en',
+            'metadata[orderId]': '1',
+            'metadata[orderCode]': activeOrder?.code,
+        });
+        expect(createStripePaymentIntent).toEqual('test-client-secret');
+        StripePlugin.options.paymentIntentCreateParams = undefined;
+    });
+
+    // https://github.com/vendurehq/vendure/issues/3183
+    it('should attach additional options to payment intent using requestOptions', async () => {
+        StripePlugin.options.requestOptions = (injector, ctx, currentOrder) => {
+            return {
+                stripeAccount: 'acct_connected',
+            };
+        };
+        let connectedAccountHeader: any;
+        let createPaymentIntentPayload: any;
+        const { activeOrder } = await shopClient.query(getActiveOrderDocument);
+        nock('https://api.stripe.com/', {
+            reqheaders: {
+                'Stripe-Account': headerValue => {
+                    connectedAccountHeader = headerValue;
+                    return true;
+                },
+            },
+        })
+            .post('/v1/payment_intents', body => {
+                createPaymentIntentPayload = body;
+                return true;
+            })
+            .reply(200, {
+                client_secret: 'test-client-secret',
+            });
+        const { createStripePaymentIntent } = await shopClient.query(createStripePaymentIntentDocument);
+        expect(createPaymentIntentPayload).toEqual({
+            amount: activeOrder?.totalWithTax.toString(),
+            currency: activeOrder?.currencyCode?.toLowerCase(),
+            customer: 'new-customer-id',
+            'automatic_payment_methods[enabled]': 'true',
+            'metadata[channelToken]': E2E_DEFAULT_CHANNEL_TOKEN,
+            'metadata[orderId]': '1',
+            'metadata[languageCode]': 'en',
+            'metadata[orderCode]': activeOrder?.code,
+        });
+        expect(connectedAccountHeader).toEqual('acct_connected');
+        expect(createStripePaymentIntent).toEqual('test-client-secret');
+        StripePlugin.options.paymentIntentCreateParams = undefined;
+    });
+
+    // https://github.com/vendurehq/vendure/issues/2412
+    it('should attach additional params to customer using customerCreateParams', async () => {
+        StripePlugin.options.customerCreateParams = async (injector, ctx, currentOrder) => {
+            const hydrator = injector.get(EntityHydrator);
+            await hydrator.hydrate(ctx, currentOrder, { relations: ['customer'] });
+            return {
+                description: `Description for ${currentOrder.customer!.emailAddress}`,
+                phone: '12345',
+            };
+        };
+
+        await shopClient.asUserWithCredentials(customers[1].emailAddress, 'test');
+        const { addItemToOrder } = await shopClient.query(addItemToOrderDocument, {
+            productVariantId: 'T_1',
+            quantity: 2,
+        });
+        orderGuard.assertSuccess(addItemToOrder);
+        order = addItemToOrder;
+
+        let createCustomerPayload: { name: string; email: string } | undefined;
+        const emptyList = { data: [] };
+        nock('https://api.stripe.com/')
+            .get(/\/v1\/customers.*/)
+            .reply(200, emptyList);
+        nock('https://api.stripe.com/')
+            .post('/v1/customers', body => {
+                createCustomerPayload = body;
+                return true;
+            })
+            .reply(201, {
+                id: 'new-customer-id',
+            });
+        nock('https://api.stripe.com/').post('/v1/payment_intents').reply(200, {
+            client_secret: 'test-client-secret',
+        });
+
+        const { activeOrder } = await shopClient.query(getActiveOrderDocument);
+
+        await shopClient.query(createStripePaymentIntentDocument);
+        expect(createCustomerPayload).toEqual({
+            email: 'trevor_donnelly96@hotmail.com',
+            name: 'Trevor Donnelly',
+            description: `Description for ${activeOrder!.customer!.emailAddress}`,
+            phone: '12345',
+        });
+    });
+
+    // https://github.com/vendurehq/vendure/issues/2450
+    it('Should not crash on signature validation failure', async () => {
+        const MOCKED_WEBHOOK_PAYLOAD = {
+            id: 'evt_0',
+            object: 'event',
+            api_version: '2022-11-15',
+            data: {
+                object: {
+                    id: 'pi_0',
+                    currency: 'usd',
+                    status: 'succeeded',
+                },
+            },
+            livemode: false,
+            pending_webhooks: 1,
+            request: {
+                id: 'req_0',
+                idempotency_key: '00000000-0000-0000-0000-000000000000',
+            },
+            type: 'payment_intent.succeeded',
+        };
+
+        const payloadString = JSON.stringify(MOCKED_WEBHOOK_PAYLOAD, null, 2);
+
+        const result = await fetch(`http://localhost:${serverPort}/payments/stripe`, {
+            method: 'post',
+            body: payloadString,
+            headers: { 'Content-Type': 'application/json' },
+        });
+
+        // We didn't provided any signatures, it should result in a 400 - Bad request
+        expect(result.status).toEqual(400);
+    });
+
+    // TODO: Contribution welcome: test webhook handling and order settlement
+    // https://github.com/vendurehq/vendure/issues/2450
+    it("Should validate the webhook's signature properly", async () => {
+        await shopClient.asUserWithCredentials(customers[0].emailAddress, 'test');
+
+        const { activeOrder } = await shopClient.query(getActiveOrderDocument);
+        order = activeOrder!;
+
+        const MOCKED_WEBHOOK_PAYLOAD = {
+            id: 'evt_0',
+            object: 'event',
+            api_version: '2022-11-15',
+            data: {
+                object: {
+                    id: 'pi_0',
+                    currency: 'usd',
+                    metadata: {
+                        orderCode: order.code,
+                        orderId: parseInt(order.id.replace('T_', ''), 10),
+                        channelToken: E2E_DEFAULT_CHANNEL_TOKEN,
+                    },
+                    amount_received: order.totalWithTax,
+                    status: 'succeeded',
+                },
+            },
+            livemode: false,
+            pending_webhooks: 1,
+            request: {
+                id: 'req_0',
+                idempotency_key: '00000000-0000-0000-0000-000000000000',
+            },
+            type: 'payment_intent.succeeded',
+        };
+
+        const payloadString = JSON.stringify(MOCKED_WEBHOOK_PAYLOAD, null, 2);
+        const stripeWebhooks = new Stripe('test-api-secret', { apiVersion: '2023-08-16' }).webhooks;
+        const header = stripeWebhooks.generateTestHeaderString({
+            payload: payloadString,
+            secret: 'test-signing-secret',
+        });
+
+        const event = stripeWebhooks.constructEvent(payloadString, header, 'test-signing-secret');
+        expect(event.id).to.equal(MOCKED_WEBHOOK_PAYLOAD.id);
+        await setShipping(shopClient);
+        // Due to the `this.orderService.transitionToState(...)` fails with the internal lookup by id,
+        // we need to put the order into `ArrangingPayment` state manually before calling the webhook handler.
+        // const transitionResult = await adminClient.query(TRANSITION_TO_ARRANGING_PAYMENT, { id: order.id });
+        // expect(transitionResult.transitionOrderToState.__typename).toBe('Order')
+
+        const result = await fetch(`http://localhost:${serverPort}/payments/stripe`, {
+            method: 'post',
+            body: payloadString,
+            headers: { 'Content-Type': 'application/json', 'Stripe-Signature': header },
+        });
+
+        // I would expect to the status to be 200, but at the moment either the
+        // `orderService.transitionToState()` or the `orderService.addPaymentToOrder()`
+        // throws an error of 'error.entity-with-id-not-found'
+        expect(result.status).toEqual(200);
+    });
+
+    // https://github.com/vendurehq/vendure/issues/3249
+    it('Should skip events without expected metadata, when the plugin option is set', async () => {
+        StripePlugin.options.skipPaymentIntentsWithoutExpectedMetadata = true;
+
+        const MOCKED_WEBHOOK_PAYLOAD = {
+            id: 'evt_0',
+            object: 'event',
+            api_version: '2022-11-15',
+            data: {
+                object: {
+                    id: 'pi_0',
+                    currency: 'usd',
+                    metadata: {
+                        dummy: 'not a vendure payload',
+                    },
+                    amount_received: 10000,
+                    status: 'succeeded',
+                },
+            },
+            livemode: false,
+            pending_webhooks: 1,
+            request: {
+                id: 'req_0',
+                idempotency_key: '00000000-0000-0000-0000-000000000000',
+            },
+            type: 'payment_intent.succeeded',
+        };
+
+        const payloadString = JSON.stringify(MOCKED_WEBHOOK_PAYLOAD, null, 2);
+        const stripeWebhooks = new Stripe('test-api-secret', { apiVersion: '2023-08-16' }).webhooks;
+        const header = stripeWebhooks.generateTestHeaderString({
+            payload: payloadString,
+            secret: 'test-signing-secret',
+        });
+
+        const result = await fetch(`http://localhost:${serverPort}/payments/stripe`, {
+            method: 'post',
+            body: payloadString,
+            headers: { 'Content-Type': 'application/json', 'Stripe-Signature': header },
+        });
+
+        expect(result.status).toEqual(200);
+    });
+
+    // https://github.com/vendurehq/vendure/issues/1630
     describe('currencies with no fractional units', () => {
         let japanProductId: string;
         beforeAll(async () => {
             const JAPAN_CHANNEL_TOKEN = 'japan-channel-token';
-            const { createChannel } = await adminClient.query<
-                CreateChannelMutation,
-                CreateChannelMutationVariables
-            >(CREATE_CHANNEL, {
+            const { createChannel } = await adminClient.query(createChannelDocument, {
                 input: {
                     code: 'japan-channel',
                     currencyCode: CurrencyCode.JPY,
@@ -219,10 +487,13 @@ describe('Stripe payments', () => {
             adminClient.setChannelToken(JAPAN_CHANNEL_TOKEN);
             shopClient.setChannelToken(JAPAN_CHANNEL_TOKEN);
 
-            const { createProduct } = await adminClient.query<
-                CreateProduct.Mutation,
-                CreateProduct.Variables
-            >(CREATE_PRODUCT, {
+            const { createStockLocation } = await adminClient.query(testCreateStockLocationDocument, {
+                input: {
+                    name: 'Japan warehouse',
+                },
+            });
+
+            const { createProduct } = await adminClient.query(createProductDocument, {
                 input: {
                     translations: [
                         {
@@ -234,30 +505,50 @@ describe('Stripe payments', () => {
                     ],
                 },
             });
-            const { createProductVariants } = await adminClient.query<
-                CreateProductVariants.Mutation,
-                CreateProductVariants.Variables
-            >(CREATE_PRODUCT_VARIANTS, {
+            const { createProductVariants } = await adminClient.query(createProductVariantsDocument, {
                 input: [
                     {
                         productId: createProduct.id,
                         sku: 'PV1',
                         optionIds: [],
                         price: 5000,
-                        stockOnHand: 100,
+                        stockLevels: [
+                            {
+                                stockLocationId: createStockLocation.id,
+                                stockOnHand: 100,
+                            },
+                        ],
                         translations: [{ languageCode: LanguageCode.en, name: 'Variant 1' }],
                     },
                 ],
             });
             japanProductId = createProductVariants[0]!.id;
+            // Create a payment method for the Japan channel
+            await adminClient.query(createPaymentMethodDocument, {
+                input: {
+                    code: `stripe-payment-${E2E_DEFAULT_CHANNEL_TOKEN}`,
+                    translations: [
+                        {
+                            name: 'Stripe payment test',
+                            description: 'This is a Stripe test payment method',
+                            languageCode: LanguageCode.en,
+                        },
+                    ],
+                    enabled: true,
+                    handler: {
+                        code: stripePaymentMethodHandler.code,
+                        arguments: [
+                            { name: 'apiKey', value: 'test-api-key' },
+                            { name: 'webhookSecret', value: 'test-signing-secret' },
+                        ],
+                    },
+                },
+            });
         });
 
         it('prepares order', async () => {
             await shopClient.asUserWithCredentials(customers[0].emailAddress, 'test');
-            const { addItemToOrder } = await shopClient.query<
-                AddItemToOrder.Mutation,
-                AddItemToOrder.Variables
-            >(ADD_ITEM_TO_ORDER, {
+            const { addItemToOrder } = await shopClient.query(addItemToOrderDocument, {
                 productVariantId: japanProductId,
                 quantity: 1,
             });
@@ -266,7 +557,7 @@ describe('Stripe payments', () => {
 
         it('sends correct amount when creating payment intent', async () => {
             let createPaymentIntentPayload: any;
-            const { activeOrder } = await shopClient.query<GetActiveOrderQuery>(GET_ACTIVE_ORDER);
+            const { activeOrder } = await shopClient.query(getActiveOrderDocument);
             nock('https://api.stripe.com/')
                 .post('/v1/payment_intents', body => {
                     createPaymentIntentPayload = body;
@@ -275,7 +566,7 @@ describe('Stripe payments', () => {
                 .reply(200, {
                     client_secret: 'test-client-secret',
                 });
-            const { createStripePaymentIntent } = await shopClient.query(CREATE_STRIPE_PAYMENT_INTENT);
+            const { createStripePaymentIntent } = await shopClient.query(createStripePaymentIntentDocument);
             expect(createPaymentIntentPayload.amount).toBe((activeOrder!.totalWithTax / 100).toString());
             expect(createPaymentIntentPayload.currency).toBe('jpy');
         });

@@ -3,6 +3,7 @@ import {
     ActiveOrderResult,
     AddPaymentToOrderResult,
     ApplyCouponCodeResult,
+    MutationAddItemsToOrderArgs,
     MutationAddItemToOrderArgs,
     MutationAddPaymentToOrderArgs,
     MutationAdjustOrderLineArgs,
@@ -23,6 +24,7 @@ import {
     SetOrderShippingMethodResult,
     ShippingMethodQuote,
     TransitionOrderToStateResult,
+    UpdateMultipleOrderItemsResult,
     UpdateOrderItemsResult,
 } from '@vendure/common/lib/generated-shop-types';
 import { QueryCountriesArgs } from '@vendure/common/lib/generated-types';
@@ -30,10 +32,7 @@ import { unique } from '@vendure/common/lib/unique';
 
 import { ErrorResultUnion, isGraphQlErrorResult } from '../../../common/error/error-result';
 import { ForbiddenError } from '../../../common/error/errors';
-import {
-    AlreadyLoggedInError,
-    NoActiveOrderError,
-} from '../../../common/error/generated-graphql-shop-errors';
+import { NoActiveOrderError } from '../../../common/error/generated-graphql-shop-errors';
 import { Translated } from '../../../common/types/locale-types';
 import { idsAreEqual } from '../../../common/utils';
 import { ACTIVE_ORDER_INPUT_FIELD_NAME, ConfigService, LogLevel } from '../../../config';
@@ -76,7 +75,8 @@ export class ShopOrderResolver {
     async order(
         @Ctx() ctx: RequestContext,
         @Args() args: QueryOrderArgs,
-        @Relations(Order) relations: RelationPaths<Order>,
+        @Relations({ entity: Order, omit: ['aggregateOrder', 'sellerOrders'] })
+        relations: RelationPaths<Order>,
     ): Promise<Order | undefined> {
         const requiredRelations: RelationPaths<Order> = ['customer', 'customer.user'];
         const order = await this.orderService.findOne(
@@ -98,7 +98,8 @@ export class ShopOrderResolver {
     @Allow(Permission.Owner)
     async activeOrder(
         @Ctx() ctx: RequestContext,
-        @Relations(Order) relations: RelationPaths<Order>,
+        @Relations({ entity: Order, omit: ['aggregateOrder', 'sellerOrders'] })
+        relations: RelationPaths<Order>,
         @Args() args: ActiveOrderArgs,
     ): Promise<Order | undefined> {
         if (ctx.authorizedAsOwnerOnly) {
@@ -107,7 +108,7 @@ export class ShopOrderResolver {
                 args[ACTIVE_ORDER_INPUT_FIELD_NAME],
             );
             if (sessionOrder) {
-                return this.orderService.findOne(ctx, sessionOrder.id);
+                return this.orderService.findOne(ctx, sessionOrder.id, relations);
             } else {
                 return;
             }
@@ -119,7 +120,8 @@ export class ShopOrderResolver {
     async orderByCode(
         @Ctx() ctx: RequestContext,
         @Args() args: QueryOrderByCodeArgs,
-        @Relations(Order) relations: RelationPaths<Order>,
+        @Relations({ entity: Order, omit: ['aggregateOrder', 'sellerOrders'] })
+        relations: RelationPaths<Order>,
     ): Promise<Order | undefined> {
         if (ctx.authorizedAsOwnerOnly) {
             const requiredRelations: RelationPaths<Order> = ['customer', 'customer.user'];
@@ -174,6 +176,44 @@ export class ShopOrderResolver {
             );
             if (sessionOrder) {
                 return this.orderService.setBillingAddress(ctx, sessionOrder.id, args.input);
+            }
+        }
+        return new NoActiveOrderError();
+    }
+
+    @Transaction()
+    @Mutation()
+    @Allow(Permission.Owner)
+    async unsetOrderShippingAddress(
+        @Ctx() ctx: RequestContext,
+        @Args() args: ActiveOrderArgs,
+    ): Promise<ErrorResultUnion<ActiveOrderResult, Order>> {
+        if (ctx.authorizedAsOwnerOnly) {
+            const sessionOrder = await this.activeOrderService.getActiveOrder(
+                ctx,
+                args[ACTIVE_ORDER_INPUT_FIELD_NAME],
+            );
+            if (sessionOrder) {
+                return this.orderService.unsetShippingAddress(ctx, sessionOrder.id);
+            }
+        }
+        return new NoActiveOrderError();
+    }
+
+    @Transaction()
+    @Mutation()
+    @Allow(Permission.Owner)
+    async unsetOrderBillingAddress(
+        @Ctx() ctx: RequestContext,
+        @Args() args: ActiveOrderArgs,
+    ): Promise<ErrorResultUnion<ActiveOrderResult, Order>> {
+        if (ctx.authorizedAsOwnerOnly) {
+            const sessionOrder = await this.activeOrderService.getActiveOrder(
+                ctx,
+                args[ACTIVE_ORDER_INPUT_FIELD_NAME],
+            );
+            if (sessionOrder) {
+                return this.orderService.unsetBillingAddress(ctx, sessionOrder.id);
             }
         }
         return new NoActiveOrderError();
@@ -253,12 +293,13 @@ export class ShopOrderResolver {
         return new NoActiveOrderError();
     }
 
+    @Transaction()
     @Query()
     @Allow(Permission.Owner)
     async nextOrderStates(
         @Ctx() ctx: RequestContext,
         @Args() args: ActiveOrderArgs,
-    ): Promise<ReadonlyArray<string>> {
+    ): Promise<readonly string[]> {
         if (ctx.authorizedAsOwnerOnly) {
             const sessionOrder = await this.activeOrderService.getActiveOrder(
                 ctx,
@@ -293,6 +334,8 @@ export class ShopOrderResolver {
     async addItemToOrder(
         @Ctx() ctx: RequestContext,
         @Args() args: MutationAddItemToOrderArgs & ActiveOrderArgs,
+        @Relations({ entity: Order, omit: ['aggregateOrder', 'sellerOrders'] })
+        relations: RelationPaths<Order>,
     ): Promise<ErrorResultUnion<UpdateOrderItemsResult, Order>> {
         const order = await this.activeOrderService.getActiveOrder(
             ctx,
@@ -305,7 +348,30 @@ export class ShopOrderResolver {
             args.productVariantId,
             args.quantity,
             (args as any).customFields,
+            relations,
         );
+    }
+
+    @Transaction()
+    @Mutation()
+    @Allow(Permission.UpdateOrder, Permission.Owner)
+    async addItemsToOrder(
+        @Ctx() ctx: RequestContext,
+        @Args() args: MutationAddItemsToOrderArgs & ActiveOrderArgs,
+    ): Promise<{ 
+        order: Order; 
+        errorResults: UpdateMultipleOrderItemsResult['errorResults'] 
+    }> {
+        const order = await this.activeOrderService.getActiveOrder(
+            ctx,
+            args[ACTIVE_ORDER_INPUT_FIELD_NAME],
+            true,
+        );
+        const result = await this.orderService.addItemsToOrder(ctx, order.id, args.inputs);
+        return {
+            order: result.order,
+            errorResults: result.errorResults,
+        };
     }
 
     @Transaction()
@@ -314,6 +380,8 @@ export class ShopOrderResolver {
     async adjustOrderLine(
         @Ctx() ctx: RequestContext,
         @Args() args: MutationAdjustOrderLineArgs & ActiveOrderArgs,
+        @Relations({ entity: Order, omit: ['aggregateOrder', 'sellerOrders'] })
+        relations: RelationPaths<Order>,
     ): Promise<ErrorResultUnion<UpdateOrderItemsResult, Order>> {
         if (args.quantity === 0) {
             return this.removeOrderLine(ctx, { orderLineId: args.orderLineId });
@@ -329,6 +397,7 @@ export class ShopOrderResolver {
             args.orderLineId,
             args.quantity,
             (args as any).customFields,
+            relations,
         );
     }
 
@@ -429,19 +498,17 @@ export class ShopOrderResolver {
         @Args() args: MutationSetCustomerForOrderArgs & ActiveOrderArgs,
     ): Promise<ErrorResultUnion<SetCustomerForOrderResult, Order>> {
         if (ctx.authorizedAsOwnerOnly) {
-            if (ctx.activeUserId) {
-                return new AlreadyLoggedInError();
-            }
             const sessionOrder = await this.activeOrderService.getActiveOrder(
                 ctx,
                 args[ACTIVE_ORDER_INPUT_FIELD_NAME],
             );
             if (sessionOrder) {
-                const customer = await this.customerService.createOrUpdate(ctx, args.input, true);
-                if (isGraphQlErrorResult(customer)) {
-                    return customer;
+                const { guestCheckoutStrategy } = this.configService.orderOptions;
+                const result = await guestCheckoutStrategy.setCustomerForOrder(ctx, sessionOrder, args.input);
+                if (isGraphQlErrorResult(result)) {
+                    return result;
                 }
-                return this.orderService.addCustomerToOrder(ctx, sessionOrder.id, customer);
+                return this.orderService.addCustomerToOrder(ctx, sessionOrder.id, result);
             }
         }
         return new NoActiveOrderError();

@@ -32,21 +32,21 @@ import { StripePluginOptions } from './types';
  * ## Setup
  *
  * 1. Add the plugin to your VendureConfig `plugins` array:
- *     ```TypeScript
+ *     ```ts
  *     import { StripePlugin } from '\@vendure/payments-plugin/package/stripe';
  *
  *     // ...
  *
  *     plugins: [
  *       StripePlugin.init({
- *         apiKey: process.env.YOUR_STRIPE_SECRET_KEY,
- *         webhookSigningSecret: process.env.YOUR_STRIPE_WEBHOOK_SIGNING_SECRET,
  *         // This prevents different customers from using the same PaymentIntent
  *         storeCustomersInStripe: true,
  *       }),
  *     ]
  *     ````
+ *     For all the plugin options, see the {@link StripePluginOptions} type.
  * 2. Create a new PaymentMethod in the Admin UI, and select "Stripe payments" as the handler.
+ * 3. Set the webhook secret and API key in the PaymentMethod form.
  *
  * ## Storefront usage
  *
@@ -65,7 +65,7 @@ import { StripePluginOptions } from './types';
  * The high-level workflow is:
  * 1. Create a "payment intent" on the server by executing the `createStripePaymentIntent` mutation which is exposed by this plugin.
  * 2. Use the returned client secret to instantiate the Stripe Payment Element:
- *    ```TypeScript
+ *    ```ts
  *    import { Elements } from '\@stripe/react-stripe-js';
  *    import { loadStripe, Stripe } from '\@stripe/stripe-js';
  *    import { CheckoutForm } from './CheckoutForm';
@@ -89,9 +89,9 @@ import { StripePluginOptions } from './types';
  *      );
  *    }
  *    ```
- *    ```TypeScript
+ *    ```ts
  *    // CheckoutForm.tsx
- *    import { useStripe, useElements, PaymentElement } from '@stripe/react-stripe-js';
+ *    import { useStripe, useElements, PaymentElement } from '\@stripe/react-stripe-js';
  *    import { FormEvent } from 'react';
  *
  *    export const CheckoutForm = ({ orderCode }: { orderCode: string }) => {
@@ -138,10 +138,10 @@ import { StripePluginOptions } from './types';
  * 3. Once the form is submitted and Stripe processes the payment, the webhook takes care of updating the order without additional action
  * in the storefront. As in the code above, the customer will be redirected to `/checkout/confirmation/${orderCode}`.
  *
- * {{% alert "primary" %}}
+ * :::info
  * A full working storefront example of the Stripe integration can be found in the
- * [Remix Starter repo](https://github.com/vendure-ecommerce/storefront-remix-starter/tree/master/app/components/checkout/stripe)
- * {{% /alert %}}
+ * [Remix Starter repo](https://github.com/vendurehq/storefront-remix-starter/tree/master/app/components/checkout/stripe)
+ * :::
  *
  * ## Local development
  *
@@ -154,7 +154,10 @@ import { StripePluginOptions } from './types';
  *    ```
  * 4. The Stripe CLI will create a webhook signing secret you can then use in your config of the StripePlugin.
  *
- * @docsCategory payments-plugin
+ * @deprecated This plugin is moving to `@vendure-community/payments-plugin`.
+ * The `@vendure/payments-plugin` package will be removed in Vendure v3.6.0.
+ *
+ * @docsCategory core plugins/PaymentsPlugin
  * @docsPage StripePlugin
  */
 @VendurePlugin({
@@ -192,11 +195,13 @@ import { StripePluginOptions } from './types';
     shopApiExtensions: {
         schema: gql`
             extend type Mutation {
-                createStripePaymentIntent: String
+                createStripePaymentIntent: String!
             }
         `,
         resolvers: [StripeResolver],
     },
+    exports: [StripeService],
+    compatibility: '^3.0.0',
 })
 export class StripePlugin {
     static options: StripePluginOptions;

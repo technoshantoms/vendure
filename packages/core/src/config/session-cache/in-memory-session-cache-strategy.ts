@@ -20,7 +20,7 @@ export class InMemorySessionCacheStrategy implements SessionCacheStrategy {
     constructor(cacheSize?: number) {
         if (cacheSize != null) {
             if (cacheSize < 1) {
-                throw new Error(`cacheSize must be a positive integer`);
+                throw new Error('cacheSize must be a positive integer');
             }
             this.cacheSize = Math.round(cacheSize);
         }
@@ -48,7 +48,10 @@ export class InMemorySessionCacheStrategy implements SessionCacheStrategy {
             this.cache.delete(session.token);
         } else if (this.cache.size === this.cacheSize) {
             // evict oldest
-            this.cache.delete(this.first());
+            const oldest = this.first();
+            if (oldest) {
+                this.cache.delete(oldest);
+            }
         }
         this.cache.set(session.token, session);
     }

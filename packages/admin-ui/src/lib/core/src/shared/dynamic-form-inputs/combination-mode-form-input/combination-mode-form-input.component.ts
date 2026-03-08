@@ -1,5 +1,5 @@
 import { ChangeDetectionStrategy, Component, OnInit, Optional } from '@angular/core';
-import { FormControl } from '@angular/forms';
+import { UntypedFormControl } from '@angular/forms';
 import { DefaultFormComponentConfig, DefaultFormComponentId } from '@vendure/common/lib/shared-types';
 import { Observable, of } from 'rxjs';
 import { map, tap } from 'rxjs/operators';
@@ -19,11 +19,12 @@ import { ConfigurableInputComponent } from '../../components/configurable-input/
     templateUrl: './combination-mode-form-input.component.html',
     styleUrls: ['./combination-mode-form-input.component.scss'],
     changeDetection: ChangeDetectionStrategy.OnPush,
+    standalone: false,
 })
 export class CombinationModeFormInputComponent implements FormInputComponent, OnInit {
     static readonly id: DefaultFormComponentId = 'combination-mode-form-input';
     readonly: boolean;
-    formControl: FormControl;
+    formControl: UntypedFormControl;
     config: DefaultFormComponentConfig<'combination-mode-form-input'>;
     selectable$: Observable<boolean>;
 

@@ -1,13 +1,19 @@
 import { Job } from '@vendure/core';
-import { ConnectionOptions, QueueSchedulerOptions, WorkerOptions } from 'bullmq';
-import { QueueOptions } from 'bullmq';
+import { ConnectionOptions, Queue, QueueOptions, WorkerOptions } from 'bullmq';
+
+/**
+ * @description
+ * This type is the third parameter to the `Queue.add()` method,
+ * which allows additional options to be specified for the job.
+ */
+export type BullJobsOptions = Parameters<Queue['add']>[2];
 
 /**
  * @description
  * Configuration options for the {@link BullMQJobQueuePlugin}.
  *
  * @since 1.2.0
- * @docsCategory job-queue-plugin
+ * @docsCategory core plugins/JobQueuePlugin
  * @docsPage BullMQPluginOptions
  * @docsWeight 0
  */
@@ -26,21 +32,51 @@ export interface BullMQPluginOptions {
      * Queue instance.
      * See the [BullMQ QueueOptions docs](https://github.com/taskforcesh/bullmq/blob/master/docs/gitbook/api/bullmq.queueoptions.md)
      */
-    queueOptions?: Exclude<QueueOptions, 'connection'>;
+    queueOptions?: Omit<QueueOptions, 'connection'>;
     /**
      * @description
      * Additional options used when instantiating the BullMQ
      * Worker instance.
      * See the [BullMQ WorkerOptions docs](https://github.com/taskforcesh/bullmq/blob/master/docs/gitbook/api/bullmq.workeroptions.md)
      */
-    workerOptions?: Exclude<WorkerOptions, 'connection'>;
+    workerOptions?: Omit<WorkerOptions, 'connection'>;
     /**
      * @description
-     * Additional options used when instantiating the BullMQ
-     * QueueScheduler instance.
-     * See the [BullMQ QueueSchedulerOptions docs](https://github.com/taskforcesh/bullmq/blob/master/docs/gitbook/api/bullmq.queuescheduleroptions.md)
+     * How many jobs from a given queue to process concurrently.
+     *
+     * Can be set to a function which receives the queue name and returns
+     * the concurrency limit. This is useful for limiting concurrency on
+     * queues which have resource-intensive jobs.
+     *
+     * **Important implementation note:** When using a function, workers are grouped
+     * by the _concurrency value_, not by queue name. Because all Vendure job types
+     * are stored in a single BullMQ queue (`QUEUE_NAME`), any worker can process
+     * any job type. This means:
+     *
+     * - Multiple Vendure queues returning the same concurrency value will share a worker
+     * - Jobs from different Vendure queues may be processed by the same worker
+     * - The concurrency limit applies to the total jobs processed by that worker,
+     *   not strictly per Vendure queue
+     *
+     * For strict per-queue concurrency isolation, consider:
+     * - Creating separate BullMQ queues per Vendure queue (requires custom implementation)
+     * - Using [BullMQ Pro Groups](https://docs.bullmq.io/bullmq-pro/groups)
+     *
+     * @example
+     * ```ts
+     * BullMQJobQueuePlugin.init({
+     *   concurrency: (queueName) => {
+     *     if (queueName === 'apply-collection-filters') {
+     *       return 1;
+     *     }
+     *     return 5;
+     *   }
+     * })
+     * ```
+     *
+     * @default 3
      */
-    schedulerOptions?: Exclude<QueueSchedulerOptions, 'connection'>;
+    concurrency?: number | ((queueName: string) => number);
     /**
      * @description
      * When a job is added to the JobQueue using `JobQueue.add()`, the calling
@@ -49,7 +85,7 @@ export interface BullMQPluginOptions {
      * the job being added.
      *
      * @example
-     * ```TypeScript
+     * ```ts
      * setRetries: (queueName, job) => {
      *   if (queueName === 'send-email') {
      *     // Override the default number of retries
@@ -61,6 +97,7 @@ export interface BullMQPluginOptions {
      * }
      *  ```
      *
+     * @deprecated Use `setJobOptions` instead.
      * @since 1.3.0
      */
     setRetries?: (queueName: string, job: Job) => number;
@@ -72,7 +109,7 @@ export interface BullMQPluginOptions {
      * value of exponential/1000ms will be used.
      *
      * @example
-     * ```TypeScript
+     * ```ts
      * setBackoff: (queueName, job) => {
      *   return {
      *     type: 'exponential', // or 'fixed'
@@ -80,10 +117,33 @@ export interface BullMQPluginOptions {
      *   };
      * }
      * ```
+     *
+     * @deprecated Use `setJobOptions` instead.
      * @since 1.3.0
      * @default 'exponential', 1000
      */
     setBackoff?: (queueName: string, job: Job) => BackoffOptions | undefined;
+    /**
+     * @description
+     * This allows you to specify additional options for a job when it is added to the queue.
+     * The object returned is the BullMQ [JobsOptions](https://api.docs.bullmq.io/types/v5.JobsOptions.html)
+     * type, which includes control over settings such as `delay`, `attempts`, `priority` and much more.
+     *
+     * This function is called every time a job is added to the queue, so you can return different options
+     * based on the job being added.
+     *
+     * @example
+     * ```ts
+     * // Here we want to assign a higher priority to jobs in the 'critical' queue
+     * setJobOptions: (queueName, job) => {
+     *   const priority = queueName === 'critical' ? 1 : 5;
+     *   return { priority };
+     * }
+     * ```
+     *
+     * @since 3.2.0
+     */
+    setJobOptions?: (queueName: string, job: Job) => BullJobsOptions;
 }
 
 /**
@@ -91,11 +151,21 @@ export interface BullMQPluginOptions {
  * Configuration for the backoff function when retrying failed jobs.
  *
  * @since 1.3.0
- * @docsCategory job-queue-plugin
+ * @docsCategory core plugins/JobQueuePlugin
  * @docsPage BullMQPluginOptions
  * @docsWeight 1
  */
 export interface BackoffOptions {
     type: 'exponential' | 'fixed';
     delay: number;
+}
+
+/**
+ * @description
+ * A definition for a Lua script used to define custom behavior in Redis
+ */
+export interface CustomScriptDefinition<T, Args extends any[]> {
+    name: string;
+    script: string;
+    numberOfKeys: number;
 }

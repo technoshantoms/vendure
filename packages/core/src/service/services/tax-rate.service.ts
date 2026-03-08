@@ -3,17 +3,19 @@ import {
     CreateTaxRateInput,
     DeletionResponse,
     DeletionResult,
+    TaxRateFilterParameter,
     UpdateTaxRateInput,
 } from '@vendure/common/lib/generated-types';
 import { ID, PaginatedList } from '@vendure/common/lib/shared-types';
 
 import { RequestContext } from '../../api/common/request-context';
-import { RelationPaths } from '../../api/index';
+import { RelationPaths } from '../../api/decorators/relations.decorator';
 import { EntityNotFoundError } from '../../common/error/errors';
-import { createSelfRefreshingCache, SelfRefreshingCache } from '../../common/index';
+import { Instrument } from '../../common/instrument-decorator';
+import { createSelfRefreshingCache, SelfRefreshingCache } from '../../common/self-refreshing-cache';
 import { ListQueryOptions } from '../../common/types/common-types';
 import { assertFound } from '../../common/utils';
-import { ConfigService } from '../../config/index';
+import { ConfigService } from '../../config/config.service';
 import { TransactionalConnection } from '../../connection/transactional-connection';
 import { CustomerGroup } from '../../entity/customer-group/customer-group.entity';
 import { TaxCategory } from '../../entity/tax-category/tax-category.entity';
@@ -22,6 +24,7 @@ import { Zone } from '../../entity/zone/zone.entity';
 import { EventBus } from '../../event-bus/event-bus';
 import { TaxRateEvent } from '../../event-bus/events/tax-rate-event';
 import { TaxRateModificationEvent } from '../../event-bus/events/tax-rate-modification-event';
+import { CustomFieldRelationService } from '../helpers/custom-field-relation/custom-field-relation.service';
 import { ListQueryBuilder } from '../helpers/list-query-builder/list-query-builder';
 import { patchEntity } from '../helpers/utils/patch-entity';
 
@@ -32,6 +35,7 @@ import { patchEntity } from '../helpers/utils/patch-entity';
  * @docsCategory services
  */
 @Injectable()
+@Instrument()
 export class TaxRateService {
     private readonly defaultTaxRate = new TaxRate({
         value: 0,
@@ -46,6 +50,7 @@ export class TaxRateService {
         private eventBus: EventBus,
         private listQueryBuilder: ListQueryBuilder,
         private configService: ConfigService,
+        private customFieldRelationService: CustomFieldRelationService,
     ) {}
 
     /**
@@ -61,8 +66,30 @@ export class TaxRateService {
         options?: ListQueryOptions<TaxRate>,
         relations?: RelationPaths<TaxRate>,
     ): Promise<PaginatedList<TaxRate>> {
+        const effectiveRelations = relations || ['customerGroup'];
+        const customPropertyMap: { [name: string]: string } = {};
+        const hasZoneIdFilter = this.listQueryBuilder.filterObjectHasProperty<TaxRateFilterParameter>(
+            options?.filter,
+            'zoneId',
+        );
+        const hasCategoryIdFilter = this.listQueryBuilder.filterObjectHasProperty<TaxRateFilterParameter>(
+            options?.filter,
+            'categoryId',
+        );
+        if (hasZoneIdFilter) {
+            effectiveRelations.push('zone');
+            customPropertyMap.zoneId = 'zone.id';
+        }
+        if (hasCategoryIdFilter) {
+            effectiveRelations.push('category');
+            customPropertyMap.zoneId = 'category.id';
+        }
         return this.listQueryBuilder
-            .build(TaxRate, options, { relations: relations ?? ['category', 'zone', 'customerGroup'], ctx })
+            .build(TaxRate, options, {
+                relations: effectiveRelations,
+                ctx,
+                customPropertyMap,
+            })
             .getManyAndCount()
             .then(([items, totalItems]) => ({
                 items,
@@ -75,9 +102,13 @@ export class TaxRateService {
         taxRateId: ID,
         relations?: RelationPaths<TaxRate>,
     ): Promise<TaxRate | undefined> {
-        return this.connection.getRepository(ctx, TaxRate).findOne(taxRateId, {
-            relations: relations ?? ['category', 'zone', 'customerGroup'],
-        });
+        return this.connection
+            .getRepository(ctx, TaxRate)
+            .findOne({
+                where: { id: taxRateId },
+                relations: relations ?? ['category', 'zone', 'customerGroup'],
+            })
+            .then(result => result ?? undefined);
     }
 
     async create(ctx: RequestContext, input: CreateTaxRateInput): Promise<TaxRate> {
@@ -92,9 +123,10 @@ export class TaxRateService {
             );
         }
         const newTaxRate = await this.connection.getRepository(ctx, TaxRate).save(taxRate);
+        await this.customFieldRelationService.updateRelations(ctx, TaxRate, input, newTaxRate);
         await this.updateActiveTaxRates(ctx);
-        this.eventBus.publish(new TaxRateModificationEvent(ctx, newTaxRate));
-        this.eventBus.publish(new TaxRateEvent(ctx, newTaxRate, 'created', input));
+        await this.eventBus.publish(new TaxRateModificationEvent(ctx, newTaxRate));
+        await this.eventBus.publish(new TaxRateEvent(ctx, newTaxRate, 'created', input));
         return assertFound(this.findOne(ctx, newTaxRate.id));
     }
 
@@ -122,14 +154,15 @@ export class TaxRateService {
             );
         }
         await this.connection.getRepository(ctx, TaxRate).save(updatedTaxRate, { reload: false });
+        await this.customFieldRelationService.updateRelations(ctx, TaxRate, input, updatedTaxRate);
         await this.updateActiveTaxRates(ctx);
 
         // Commit the transaction so that the worker process can access the updated
         // TaxRate when updating its own tax rate cache.
         await this.connection.commitOpenTransaction(ctx);
 
-        this.eventBus.publish(new TaxRateModificationEvent(ctx, updatedTaxRate));
-        this.eventBus.publish(new TaxRateEvent(ctx, updatedTaxRate, 'updated', input));
+        await this.eventBus.publish(new TaxRateModificationEvent(ctx, updatedTaxRate));
+        await this.eventBus.publish(new TaxRateEvent(ctx, updatedTaxRate, 'updated', input));
 
         return assertFound(this.findOne(ctx, taxRate.id));
     }
@@ -139,11 +172,11 @@ export class TaxRateService {
         const deletedTaxRate = new TaxRate(taxRate);
         try {
             await this.connection.getRepository(ctx, TaxRate).remove(taxRate);
-            this.eventBus.publish(new TaxRateEvent(ctx, deletedTaxRate, 'deleted', id));
+            await this.eventBus.publish(new TaxRateEvent(ctx, deletedTaxRate, 'deleted', id));
             return {
                 result: DeletionResult.DELETED,
             };
-        } catch (e) {
+        } catch (e: any) {
             return {
                 result: DeletionResult.NOT_DELETED,
                 message: e.toString(),
@@ -156,7 +189,11 @@ export class TaxRateService {
      * Returns the applicable TaxRate based on the specified Zone and TaxCategory. Used when calculating Order
      * prices.
      */
-    async getApplicableTaxRate(ctx: RequestContext, zone: Zone, taxCategory: TaxCategory): Promise<TaxRate> {
+    async getApplicableTaxRate(
+        ctx: RequestContext,
+        zone: Zone | ID,
+        taxCategory: TaxCategory | ID,
+    ): Promise<TaxRate> {
         const rate = (await this.getActiveTaxRates(ctx)).find(r => r.test(zone, taxCategory));
         return rate || this.defaultTaxRate;
     }

@@ -1,17 +1,28 @@
-import { PluginCommonModule, RuntimeVendureConfig, VendurePlugin } from '@vendure/core';
+import type { ListParameters } from '@mollie/api-client/dist/types/binders/methods/parameters';
+import {
+    Injector,
+    Order,
+    PluginCommonModule,
+    RequestContext,
+    RuntimeVendureConfig,
+    VendurePlugin,
+} from '@vendure/core';
 
+import { adminApiExtensions, shopApiExtensions } from './api-extensions';
 import { PLUGIN_INIT_OPTIONS } from './constants';
-import { shopSchema } from './mollie-shop-schema';
+import { MollieCommonResolver } from './mollie.common-resolver';
 import { MollieController } from './mollie.controller';
 import { molliePaymentHandler } from './mollie.handler';
-import { MollieResolver } from './mollie.resolver';
 import { MollieService } from './mollie.service';
+import { MollieShopResolver } from './mollie.shop-resolver';
+
+export type AdditionalEnabledPaymentMethodsParams = Partial<Omit<ListParameters, 'resource'>>;
 
 /**
  * @description
  * Configuration options for the Mollie payments plugin.
  *
- * @docsCategory payments-plugin
+ * @docsCategory core plugins/PaymentsPlugin
  * @docsPage MolliePlugin
  */
 export interface MolliePluginOptions {
@@ -21,6 +32,64 @@ export interface MolliePluginOptions {
      * This is used by Mollie to send webhook events to the Vendure server
      */
     vendureHost: string;
+
+    /**
+     * @description
+     * Provide additional parameters to the Mollie enabled payment methods API call. By default,
+     * the plugin will already pass the `resource` parameter.
+     *
+     * For example, if you want to provide a `locale` and `billingCountry` for the API call, you can do so like this:
+     *
+     * **Note:** The `order` argument is possibly `null`, this could happen when you fetch the available payment methods
+     * before the order is created.
+     *
+     * @example
+     * ```ts
+     * import { VendureConfig } from '\@vendure/core';
+     * import { MolliePlugin, getLocale } from '\@vendure/payments-plugin/package/mollie';
+     *
+     * export const config: VendureConfig = {
+     *   // ...
+     *   plugins: [
+     *     MolliePlugin.init({
+     *       enabledPaymentMethodsParams: (injector, ctx, order) => {
+     *         const locale = order?.billingAddress?.countryCode
+     *             ? getLocale(order.billingAddress.countryCode, ctx.languageCode)
+     *             : undefined;
+     *
+     *         return {
+     *           locale,
+     *           billingCountry: order?.billingAddress?.countryCode,
+     *         },
+     *       }
+     *     }),
+     *   ],
+     * };
+     * ```
+     *
+     * @since 2.2.0
+     */
+    enabledPaymentMethodsParams?: (
+        injector: Injector,
+        ctx: RequestContext,
+        order: Order | null,
+    ) => AdditionalEnabledPaymentMethodsParams | Promise<AdditionalEnabledPaymentMethodsParams>;
+    /**
+     * @description
+     * Immediate capture mode for pay-later methods like Klarna.
+     * Setting this option will make the plugin ignore the `immediateCapture` option in the `createMolliePaymentIntent` mutation.
+     *
+     * The default is true, unless set otherwise as input in the `createMolliePaymentIntent` mutation.
+     */
+    immediateCapture?: boolean;
+    /**
+     * @description
+     * Disable the processing of incoming Mollie webhooks.
+     * Handle with care! This will keep orders in 'AddingItems' state if you don't manually process the Mollie payments via the `syncMolliePaymentStatus` mutation.
+     *
+     * @since 3.6.0
+     */
+    disableWebhookProcessing?: boolean;
 }
 
 /**
@@ -28,9 +97,9 @@ export interface MolliePluginOptions {
  * Plugin to enable payments through the [Mollie platform](https://docs.mollie.com/).
  * This plugin uses the Order API from Mollie, not the Payments API.
  *
- * ## Requirements
+ * ### Requirements
  *
- * 1. You will need to create a Mollie account and get your apiKey in the dashboard.
+ * 1. You will need to create a Mollie account and get your api key from the Mollie dashboard.
  * 2. Install the Payments plugin and the Mollie client:
  *
  *     `yarn add \@vendure/payments-plugin \@mollie/api-client`
@@ -39,10 +108,10 @@ export interface MolliePluginOptions {
  *
  *     `npm install \@vendure/payments-plugin \@mollie/api-client`
  *
- * ## Setup
+ * ### Setup
  *
  * 1. Add the plugin to your VendureConfig `plugins` array:
- *     ```TypeScript
+ *     ```ts
  *     import { MolliePlugin } from '\@vendure/payments-plugin/package/mollie';
  *
  *     // ...
@@ -51,20 +120,25 @@ export interface MolliePluginOptions {
  *       MolliePlugin.init({ vendureHost: 'https://yourhost.io/' }),
  *     ]
  *     ```
- * 2. Create a new PaymentMethod in the Admin UI, and select "Mollie payments" as the handler.
- * 3. Set the Redirect URL. This is the url that is used to redirect the end-user, e.g. `https://storefront/order`
- * 4. Set your Mollie apiKey in the `API Key` field.
+ * 2. Create a new payment method in the Admin UI, and select "Mollie payments" as the handler.
+ * 3. Set your Mollie apiKey in the `API Key` field.
+ * 4. Set the `Fallback redirectUrl` to the url that the customer should be redirected to after completing the payment.
+ * You can override this url by passing the `redirectUrl` as an argument to the `createMolliePaymentIntent` mutation.
  *
- * ## Storefront usage
+ * ### Storefront usage
  *
  * In your storefront you add a payment to an order using the `createMolliePaymentIntent` mutation. In this example, our Mollie
- * PaymentMethod was given the code "mollie-payment-method".
+ * payment method was given the code "mollie-payment-method". The `redirectUrl` should be your order confirmation page.
+ * It is the url that is used to redirect the customer back to your storefront after completing the payment.
  *
  * ```GraphQL
  * mutation CreateMolliePaymentIntent {
  *   createMolliePaymentIntent(input: {
- *     paymentMethodCode: "mollie-payment-method"
- *     molliePaymentMethodCode: "ideal"
+ *     redirectUrl: "https://storefront/order/1234XYZ" // Optional, the fallback redirect url set in the admin UI will be used if not provided
+ *     paymentMethodCode: "mollie-payment-method" // Optional, the first method with Mollie as handler will be used if not provided
+ *     molliePaymentMethodCode: "ideal", // Optional argument to skip the method selection in the hosted checkout
+ *     locale: "nl_NL", // Optional, the browser language will be used by Mollie if not provided
+ *     immediateCapture: true, // Optional, default is true, set to false if you expect the order fulfillment to take longer than 24 hours
  *   }) {
  *          ... on MolliePaymentIntent {
  *               url
@@ -77,11 +151,9 @@ export interface MolliePluginOptions {
  * }
  * ```
  *
- * The response will contain
- * a redirectUrl, which can be used to redirect your customer to the Mollie
- * platform.
+ * You can use `molliePaymentIntent.url` to redirect the customer to the Mollie platform.
  *
- * 'molliePaymentMethodCode' is an optional parameter that can be passed to skip Mollie's hosted payment method selection screen
+ * The `molliePaymentMethodCode` is an optional parameter that can be passed to preselect a payment method, and skip Mollie's payment method selection screen
  * You can get available Mollie payment methods with the following query:
  *
  * ```GraphQL
@@ -106,20 +178,56 @@ export interface MolliePluginOptions {
  *  }
  * }
  * ```
- * You can pass `MolliePaymentMethod.code` to the `createMolliePaymentIntent` mutation to skip the method selection.
  *
  * After completing payment on the Mollie platform,
- * the user is redirected to the configured redirect url + orderCode: `https://storefront/order/CH234X5`
+ * the user is redirected by Mollie to the provided redirect url (confirmation page).
+ * E.g. `https://storefront/order/`. The redirect url here was `https://storefront/order`, the order code `CH234X5` is appended automatically by the plugin.
  *
- * ## Pay later methods
- * Mollie supports pay-later methods like 'Klarna Pay Later'. For pay-later methods, the status of an order is
- * 'PaymentAuthorized' after the Mollie hosted checkout. You need to manually settle the payment via the admin ui to capture the payment!
- * Make sure you capture a payment within 28 days, because this is the Klarna expiry time
+ * #### Force payment status update
  *
- * If you don't want this behaviour (Authorized first), you can set 'autoCapture=true' on the payment method. This option will immediately
- * capture the payment after a customer authorizes the payment.
+ * Mollie does not give any guarantees on webhook delivery time, and in some rare cases,
+ * the Mollie webhook is delayed and the order status is not updated in Vendure.
  *
- * @docsCategory payments-plugin
+ * You can use the `syncMolliePaymentStatus` mutation to force update the order status based on the Mollie payment status.
+ * This mutation will find any settled or authorized Mollie payments for the given order and update the order status in Vendure accordingly.
+ *
+ * ```GraphQL
+ * mutation SyncMolliePaymentStatus {
+ *   syncMolliePaymentStatus(orderCode: "CH234X5") {
+ *     id
+ *     state
+ *   }
+ * }
+ * ```
+ *
+ * You should wait for an incoming webhook first, because due to technical limitations on the Mollie API, the `syncMolliePaymentStatus`
+ * mutation will iterate through the last 500 Mollie payments to find the payments for the given order.
+ * Hence, it is not very performant, and should only be used as a fallback when a webhook
+ * was not received for ~10 seconds.
+ *
+ * ### Pay later methods
+ *
+ * Mollie supports pay-later methods like 'Klarna Pay Later'. Pay-later methods are captured immediately after payment.
+ *
+ * If your order fulfillment time is longer than 24 hours You should pass `immediateCapture=false` to the `createMolliePaymentIntent` mutation.
+ * This will transition your order to 'PaymentAuthorized' after the Mollie hosted checkout.
+ * You need to manually capture the payment after the order is fulfilled, by settling existing payments, either via the admin UI or in custom code.
+ *
+ * Make sure to capture a payment within 28 days, after that the payment will be automatically released.
+ * See the [Mollie documentation](https://docs.mollie.com/docs/place-a-hold-for-a-payment#authorization-expiration-window)
+ * for more information.
+ *
+ * ### ArrangingAdditionalPayment state
+ *
+ * In some cases, a customer can add items to the active order, while a Mollie checkout is still open, or an administrator can modify an order.
+ * Both of these actions will result in an order being in `ArrangingAdditionalPayment` status.
+ * To finalize an order in `ArrangingAdditionalPayment` status, you can use call the `createMolliePaymentIntent` mutation again with an additional `orderId` as input.
+ * The `orderId` argument is needed, because an order in `ArrangingAdditionalPayment` status is not an active order anymore.
+ *
+ * @deprecated This plugin is moving to `@vendure-community/payments-plugin`.
+ * The `@vendure/payments-plugin` package will be removed in Vendure v3.6.0.
+ *
+ * @docsCategory core plugins/PaymentsPlugin
  * @docsPage MolliePlugin
  * @docsWeight 0
  */
@@ -132,9 +240,14 @@ export interface MolliePluginOptions {
         return config;
     },
     shopApiExtensions: {
-        schema: shopSchema,
-        resolvers: [MollieResolver],
+        schema: shopApiExtensions,
+        resolvers: [MollieCommonResolver, MollieShopResolver],
     },
+    adminApiExtensions: {
+        schema: adminApiExtensions,
+        resolvers: [MollieCommonResolver],
+    },
+    compatibility: '^3.0.0',
 })
 export class MolliePlugin {
     static options: MolliePluginOptions;

@@ -3,10 +3,13 @@ import { PaginationInstance } from 'ngx-pagination';
 import { BehaviorSubject, combineLatest, Observable } from 'rxjs';
 import { map, tap } from 'rxjs/operators';
 
-import { SearchProductsQuery } from '../../../common/generated-types';
+import {
+    GetProductVariantsForMultiSelectorDocument,
+    SearchProductsQuery,
+} from '../../../common/generated-types';
 import { SelectionManager } from '../../../common/utilities/selection-manager';
 import { DataService } from '../../../data/providers/data.service';
-import { Dialog } from '../../../providers/modal/modal.service';
+import { Dialog } from '../../../providers/modal/modal.types';
 
 export type SearchItem = SearchProductsQuery['search']['items'][number];
 
@@ -15,6 +18,7 @@ export type SearchItem = SearchProductsQuery['search']['items'][number];
     templateUrl: './product-multi-selector-dialog.component.html',
     styleUrls: ['./product-multi-selector-dialog.component.scss'],
     changeDetection: ChangeDetectionStrategy.OnPush,
+    standalone: false,
 })
 export class ProductMultiSelectorDialogComponent implements OnInit, Dialog<SearchItem[]> {
     mode: 'product' | 'variant' = 'product';
@@ -33,7 +37,10 @@ export class ProductMultiSelectorDialogComponent implements OnInit, Dialog<Searc
     resolveWith: (result?: SearchItem[]) => void;
     private paginationConfig$ = new BehaviorSubject<PaginationInstance>(this.paginationConfig);
 
-    constructor(private dataService: DataService, private changeDetector: ChangeDetectorRef) {}
+    constructor(
+        private dataService: DataService,
+        private changeDetector: ChangeDetectorRef,
+    ) {}
 
     ngOnInit(): void {
         const idFn =
@@ -89,17 +96,19 @@ export class ProductMultiSelectorDialogComponent implements OnInit, Dialog<Searc
                                     ({
                                         productId: product.id,
                                         productName: product.name,
-                                    } as SearchItem),
+                                    }) as SearchItem,
                             ),
                         );
                         this.changeDetector.markForCheck();
                     });
             } else {
-                this.dataService.product
-                    .getProductVariants({
-                        filter: {
-                            id: {
-                                in: this.initialSelectionIds,
+                this.dataService
+                    .query(GetProductVariantsForMultiSelectorDocument, {
+                        options: {
+                            filter: {
+                                id: {
+                                    in: this.initialSelectionIds,
+                                },
                             },
                         },
                     })
@@ -110,7 +119,7 @@ export class ProductMultiSelectorDialogComponent implements OnInit, Dialog<Searc
                                     ({
                                         productVariantId: variant.id,
                                         productVariantName: variant.name,
-                                    } as SearchItem),
+                                    }) as SearchItem,
                             ),
                         );
                         this.changeDetector.markForCheck();

@@ -1,3 +1,8 @@
+> **Deprecation Notice:** This package is moving to
+> [`@vendure-community/elasticsearch-plugin`](https://github.com/vendurehq/community-plugins).
+> The `@vendure/elasticsearch-plugin` package will be removed in Vendure v3.6.0.
+> Please update your dependencies to use the `@vendure-community/*` scope.
+
 # Vendure Elasticsearch Plugin
 
 The `ElasticsearchPlugin` uses Elasticsearch to power the Vendure product search. 
@@ -6,4 +11,4 @@ The `ElasticsearchPlugin` uses Elasticsearch to power the Vendure product search
 
 `npm install @vendure/elasticsearch-plugin`
 
-For documentation, see [www.vendure.io/docs/typescript-api/elasticsearch-plugin/](https://www.vendure.io/docs/typescript-api/elasticsearch-plugin/)
+For documentation, see [docs.vendure.io/reference/core-plugins/elasticsearch-plugin/](https://docs.vendure.io/reference/core-plugins/elasticsearch-plugin/)

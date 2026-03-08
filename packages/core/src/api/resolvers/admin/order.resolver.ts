@@ -11,6 +11,7 @@ import {
     MutationDeleteOrderNoteArgs,
     MutationModifyOrderArgs,
     MutationRefundOrderArgs,
+    MutationSetOrderCustomerArgs,
     MutationSetOrderCustomFieldsArgs,
     MutationSettlePaymentArgs,
     MutationSettleRefundArgs,
@@ -45,7 +46,10 @@ import { Transaction } from '../../decorators/transaction.decorator';
 
 @Resolver()
 export class OrderResolver {
-    constructor(private orderService: OrderService, private connection: TransactionalConnection) {}
+    constructor(
+        private orderService: OrderService,
+        private connection: TransactionalConnection,
+    ) {}
 
     @Query()
     @Allow(Permission.ReadOrder)
@@ -62,7 +66,8 @@ export class OrderResolver {
     async order(
         @Ctx() ctx: RequestContext,
         @Args() args: QueryOrderArgs,
-        @Relations(Order) relations: RelationPaths<Order>,
+        @Relations({ entity: Order, omit: ['aggregateOrder', 'sellerOrders'] })
+        relations: RelationPaths<Order>,
     ): Promise<Order | undefined> {
         return this.orderService.findOne(ctx, args.id, relations);
     }
@@ -150,6 +155,13 @@ export class OrderResolver {
     @Allow(Permission.UpdateOrder)
     async setOrderCustomFields(@Ctx() ctx: RequestContext, @Args() args: MutationSetOrderCustomFieldsArgs) {
         return this.orderService.updateCustomFields(ctx, args.input.id, args.input.customFields);
+    }
+
+    @Transaction()
+    @Mutation()
+    @Allow(Permission.UpdateOrder)
+    async setOrderCustomer(@Ctx() ctx: RequestContext, @Args() { input }: MutationSetOrderCustomerArgs) {
+        return this.orderService.updateOrderCustomer(ctx, input);
     }
 
     @Transaction()

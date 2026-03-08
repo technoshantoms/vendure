@@ -7,9 +7,7 @@ import { FormInputComponent } from '../../../common/component-registry-types';
 import { BaseCodeEditorFormInputComponent } from './base-code-editor-form-input.component';
 
 function htmlValidator(): ValidatorFn {
-    return (control: AbstractControl): ValidationErrors | null => {
-        return null;
-    };
+    return (control: AbstractControl): ValidationErrors | null => null;
 }
 
 const HTML_TAG_RE = /<\/?[^>]+>?/g;
@@ -27,6 +25,7 @@ const HTML_TAG_RE = /<\/?[^>]+>?/g;
     templateUrl: './html-editor-form-input.component.html',
     styleUrls: ['./html-editor-form-input.component.scss'],
     changeDetection: ChangeDetectionStrategy.OnPush,
+    standalone: false,
 })
 export class HtmlEditorFormInputComponent
     extends BaseCodeEditorFormInputComponent
@@ -66,9 +65,7 @@ export class HtmlEditorFormInputComponent
                     );
                 });
             },
-            getErrorMessage: (json: string): string | undefined => {
-                return;
-            },
+            getErrorMessage: (json: string): string | undefined => undefined,
         });
     }
 

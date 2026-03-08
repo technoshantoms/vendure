@@ -1,35 +1,24 @@
-/* tslint:disable:no-non-null-assertion */
+import { DeletionResult, LogicalOperator, SortOrder } from '@vendure/common/lib/generated-types';
 import { omit } from '@vendure/common/lib/omit';
 import { pick } from '@vendure/common/lib/pick';
 import { mergeConfig } from '@vendure/core';
-import { createTestEnvironment } from '@vendure/testing';
+import { createErrorResultGuard, createTestEnvironment, ErrorResultGuard } from '@vendure/testing';
 import fs from 'fs-extra';
-import path from 'path';
+import path from 'node:path';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { initialData } from '../../../e2e-common/e2e-initial-data';
-import { testConfig, TEST_SETUP_TIMEOUT_MS } from '../../../e2e-common/test-config';
+import { TEST_SETUP_TIMEOUT_MS, testConfig } from '../../../e2e-common/test-config';
 
+import { ResultOf } from './graphql/graphql-admin';
 import {
-    AssetFragment,
-    CreateAssets,
-    DeleteAsset,
-    DeletionResult,
-    GetAsset,
-    GetAssetFragmentFirst,
-    GetAssetList,
-    GetProductWithVariants,
-    LogicalOperator,
-    SortOrder,
-    UpdateAsset,
-} from './graphql/generated-e2e-admin-types';
-import {
-    CREATE_ASSETS,
-    DELETE_ASSET,
-    GET_ASSET,
-    GET_ASSET_FRAGMENT_FIRST,
-    GET_ASSET_LIST,
-    GET_PRODUCT_WITH_VARIANTS,
-    UPDATE_ASSET,
+    createAssetsDocument,
+    deleteAssetDocument,
+    getAssetDocument,
+    getAssetFragmentFirstDocument,
+    getAssetListDocument,
+    getProductWithVariantsDocument,
+    updateAssetDocument,
 } from './graphql/shared-definitions';
 
 describe('Asset resolver', () => {
@@ -58,16 +47,13 @@ describe('Asset resolver', () => {
     });
 
     it('assets', async () => {
-        const { assets } = await adminClient.query<GetAssetList.Query, GetAssetList.Variables>(
-            GET_ASSET_LIST,
-            {
-                options: {
-                    sort: {
-                        name: SortOrder.ASC,
-                    },
+        const { assets } = await adminClient.query(getAssetListDocument, {
+            options: {
+                sort: {
+                    name: SortOrder.ASC,
                 },
             },
-        );
+        });
 
         expect(assets.totalItems).toBe(4);
         expect(assets.items.map(a => omit(a, ['id']))).toEqual([
@@ -109,7 +95,7 @@ describe('Asset resolver', () => {
     });
 
     it('asset', async () => {
-        const { asset } = await adminClient.query<GetAsset.Query, GetAsset.Variables>(GET_ASSET, {
+        const { asset } = await adminClient.query(getAssetDocument, {
             id: firstAssetId,
         });
 
@@ -127,21 +113,28 @@ describe('Asset resolver', () => {
     });
 
     /**
-     * https://github.com/vendure-ecommerce/vendure/issues/459
+     * https://github.com/vendurehq/vendure/issues/459
      */
     it('transforms URL when fragment defined before query (GH issue #459)', async () => {
-        const { asset } = await adminClient.query<
-            GetAssetFragmentFirst.Query,
-            GetAssetFragmentFirst.Variables
-        >(GET_ASSET_FRAGMENT_FIRST, {
+        const result = await adminClient.query(getAssetFragmentFirstDocument, {
             id: firstAssetId,
         });
 
-        expect(asset?.preview).toBe('test-url/test-assets/alexandru-acea-686569-unsplash__preview.jpg');
+        // @ts-expect-error
+        expect(result.asset?.preview).toBe(
+            'test-url/test-assets/alexandru-acea-686569-unsplash__preview.jpg',
+        );
     });
 
     describe('createAssets', () => {
-        function isAsset(input: CreateAssets.CreateAssets): input is AssetFragment {
+        type AssetResult = Extract<
+            ResultOf<typeof createAssetsDocument>['createAssets'][number],
+            { name: string }
+        >;
+
+        function isAsset(
+            input: ResultOf<typeof createAssetsDocument>['createAssets'][number],
+        ): input is AssetResult {
             return input.hasOwnProperty('name');
         }
 
@@ -150,8 +143,8 @@ describe('Asset resolver', () => {
                 path.join(__dirname, 'fixtures/assets/pps1.jpg'),
                 path.join(__dirname, 'fixtures/assets/pps2.jpg'),
             ];
-            const { createAssets }: CreateAssets.Mutation = await adminClient.fileUploadMutation({
-                mutation: CREATE_ASSETS,
+            const { createAssets } = await adminClient.fileUploadMutation({
+                mutation: createAssetsDocument,
                 filePaths: filesToUpload,
                 mapVariables: filePaths => ({
                     input: filePaths.map(p => ({ file: null })),
@@ -160,7 +153,11 @@ describe('Asset resolver', () => {
 
             expect(createAssets.length).toBe(2);
             const results = createAssets.filter(isAsset);
-            expect(results.map(a => omit(a, ['id'])).sort((a, b) => (a.name < b.name ? -1 : 1))).toEqual([
+            expect(
+                results
+                    .map((a: AssetResult) => omit(a, ['id']))
+                    .sort((a: AssetResult, b: AssetResult) => (a.name < b.name ? -1 : 1)),
+            ).toEqual([
                 {
                     fileSize: 1680,
                     focalPoint: null,
@@ -188,8 +185,8 @@ describe('Asset resolver', () => {
 
         it('permitted type by file extension', async () => {
             const filesToUpload = [path.join(__dirname, 'fixtures/assets/dummy.pdf')];
-            const { createAssets }: CreateAssets.Mutation = await adminClient.fileUploadMutation({
-                mutation: CREATE_ASSETS,
+            const { createAssets } = await adminClient.fileUploadMutation({
+                mutation: createAssetsDocument,
                 filePaths: filesToUpload,
                 mapVariables: filePaths => ({
                     input: filePaths.map(p => ({ file: null })),
@@ -198,7 +195,7 @@ describe('Asset resolver', () => {
 
             expect(createAssets.length).toBe(1);
             const results = createAssets.filter(isAsset);
-            expect(results.map(a => omit(a, ['id']))).toEqual([
+            expect(results.map((a: AssetResult) => omit(a, ['id']))).toEqual([
                 {
                     fileSize: 1680,
                     focalPoint: null,
@@ -212,11 +209,11 @@ describe('Asset resolver', () => {
             ]);
         });
 
-        // https://github.com/vendure-ecommerce/vendure/issues/727
+        // https://github.com/vendurehq/vendure/issues/727
         it('file extension with shared type', async () => {
             const filesToUpload = [path.join(__dirname, 'fixtures/assets/dummy.zip')];
-            const { createAssets }: CreateAssets.Mutation = await adminClient.fileUploadMutation({
-                mutation: CREATE_ASSETS,
+            const { createAssets } = await adminClient.fileUploadMutation({
+                mutation: createAssetsDocument,
                 filePaths: filesToUpload,
                 mapVariables: filePaths => ({
                     input: filePaths.map(p => ({ file: null })),
@@ -227,7 +224,7 @@ describe('Asset resolver', () => {
 
             expect(isAsset(createAssets[0])).toBe(true);
             const results = createAssets.filter(isAsset);
-            expect(results.map(a => omit(a, ['id']))).toEqual([
+            expect(results.map((a: AssetResult) => omit(a, ['id']))).toEqual([
                 {
                     fileSize: 1680,
                     focalPoint: null,
@@ -243,8 +240,8 @@ describe('Asset resolver', () => {
 
         it('not permitted type', async () => {
             const filesToUpload = [path.join(__dirname, 'fixtures/assets/dummy.txt')];
-            const { createAssets }: CreateAssets.Mutation = await adminClient.fileUploadMutation({
-                mutation: CREATE_ASSETS,
+            const { createAssets } = await adminClient.fileUploadMutation({
+                mutation: createAssetsDocument,
                 filePaths: filesToUpload,
                 mapVariables: filePaths => ({
                     input: filePaths.map(p => ({ file: null })),
@@ -253,7 +250,7 @@ describe('Asset resolver', () => {
 
             expect(createAssets.length).toBe(1);
             expect(createAssets[0]).toEqual({
-                message: `The MIME type 'text/plain' is not permitted.`,
+                message: 'The MIME type "text/plain" is not permitted.',
                 mimeType: 'text/plain',
                 fileName: 'dummy.txt',
             });
@@ -261,8 +258,8 @@ describe('Asset resolver', () => {
 
         it('create with new tags', async () => {
             const filesToUpload = [path.join(__dirname, 'fixtures/assets/pps1.jpg')];
-            const { createAssets }: CreateAssets.Mutation = await adminClient.fileUploadMutation({
-                mutation: CREATE_ASSETS,
+            const { createAssets } = await adminClient.fileUploadMutation({
+                mutation: createAssetsDocument,
                 filePaths: filesToUpload,
                 mapVariables: filePaths => ({
                     input: filePaths.map(p => ({ file: null, tags: ['foo', 'bar'] })),
@@ -270,7 +267,7 @@ describe('Asset resolver', () => {
             });
             const results = createAssets.filter(isAsset);
 
-            expect(results.map(a => pick(a, ['id', 'name', 'tags']))).toEqual([
+            expect(results.map((a: AssetResult) => pick(a, ['id', 'name', 'tags']))).toEqual([
                 {
                     id: 'T_9',
                     name: 'pps1.jpg',
@@ -284,8 +281,8 @@ describe('Asset resolver', () => {
 
         it('create with existing tags', async () => {
             const filesToUpload = [path.join(__dirname, 'fixtures/assets/pps1.jpg')];
-            const { createAssets }: CreateAssets.Mutation = await adminClient.fileUploadMutation({
-                mutation: CREATE_ASSETS,
+            const { createAssets } = await adminClient.fileUploadMutation({
+                mutation: createAssetsDocument,
                 filePaths: filesToUpload,
                 mapVariables: filePaths => ({
                     input: filePaths.map(p => ({ file: null, tags: ['foo', 'bar'] })),
@@ -293,7 +290,7 @@ describe('Asset resolver', () => {
             });
             const results = createAssets.filter(isAsset);
 
-            expect(results.map(a => pick(a, ['id', 'name', 'tags']))).toEqual([
+            expect(results.map((a: AssetResult) => pick(a, ['id', 'name', 'tags']))).toEqual([
                 {
                     id: 'T_10',
                     name: 'pps1.jpg',
@@ -307,8 +304,8 @@ describe('Asset resolver', () => {
 
         it('create with new and existing tags', async () => {
             const filesToUpload = [path.join(__dirname, 'fixtures/assets/pps1.jpg')];
-            const { createAssets }: CreateAssets.Mutation = await adminClient.fileUploadMutation({
-                mutation: CREATE_ASSETS,
+            const { createAssets } = await adminClient.fileUploadMutation({
+                mutation: createAssetsDocument,
                 filePaths: filesToUpload,
                 mapVariables: filePaths => ({
                     input: filePaths.map(p => ({ file: null, tags: ['quux', 'bar'] })),
@@ -316,7 +313,7 @@ describe('Asset resolver', () => {
             });
             const results = createAssets.filter(isAsset);
 
-            expect(results.map(a => pick(a, ['id', 'name', 'tags']))).toEqual([
+            expect(results.map((a: AssetResult) => pick(a, ['id', 'name', 'tags']))).toEqual([
                 {
                     id: 'T_11',
                     name: 'pps1.jpg',
@@ -328,7 +325,7 @@ describe('Asset resolver', () => {
             ]);
         });
 
-        // https://github.com/vendure-ecommerce/vendure/issues/990
+        // https://github.com/vendurehq/vendure/issues/990
         it('errors if the filesize is too large', async () => {
             /**
              * Based on https://stackoverflow.com/a/49433633/772859
@@ -347,15 +344,15 @@ describe('Asset resolver', () => {
             await createEmptyFileOfSize(filename, twentyOneMib);
 
             try {
-                const { createAssets }: CreateAssets.Mutation = await adminClient.fileUploadMutation({
-                    mutation: CREATE_ASSETS,
+                await adminClient.fileUploadMutation({
+                    mutation: createAssetsDocument,
                     filePaths: [filename],
                     mapVariables: filePaths => ({
                         input: filePaths.map(p => ({ file: null })),
                     }),
                 });
                 fail('Should have thrown');
-            } catch (e) {
+            } catch (e: any) {
                 expect(e.message).toContain('File truncated as it exceeds the 20971520 byte size limit');
             } finally {
                 fs.rmSync(filename);
@@ -365,42 +362,33 @@ describe('Asset resolver', () => {
 
     describe('filter by tags', () => {
         it('and', async () => {
-            const { assets } = await adminClient.query<GetAssetList.Query, GetAssetList.Variables>(
-                GET_ASSET_LIST,
-                {
-                    options: {
-                        tags: ['foo', 'bar'],
-                        tagsOperator: LogicalOperator.AND,
-                    },
+            const { assets } = await adminClient.query(getAssetListDocument, {
+                options: {
+                    tags: ['foo', 'bar'],
+                    tagsOperator: LogicalOperator.AND,
                 },
-            );
+            });
 
             expect(assets.items.map(i => i.id).sort()).toEqual(['T_10', 'T_9']);
         });
 
         it('or', async () => {
-            const { assets } = await adminClient.query<GetAssetList.Query, GetAssetList.Variables>(
-                GET_ASSET_LIST,
-                {
-                    options: {
-                        tags: ['foo', 'bar'],
-                        tagsOperator: LogicalOperator.OR,
-                    },
+            const { assets } = await adminClient.query(getAssetListDocument, {
+                options: {
+                    tags: ['foo', 'bar'],
+                    tagsOperator: LogicalOperator.OR,
                 },
-            );
+            });
 
             expect(assets.items.map(i => i.id).sort()).toEqual(['T_10', 'T_11', 'T_9']);
         });
 
         it('empty array', async () => {
-            const { assets } = await adminClient.query<GetAssetList.Query, GetAssetList.Variables>(
-                GET_ASSET_LIST,
-                {
-                    options: {
-                        tags: [],
-                    },
+            const { assets } = await adminClient.query(getAssetListDocument, {
+                options: {
+                    tags: [],
                 },
-            );
+            });
 
             expect(assets.totalItems).toBe(11);
         });
@@ -408,32 +396,26 @@ describe('Asset resolver', () => {
 
     describe('updateAsset', () => {
         it('update name', async () => {
-            const { updateAsset } = await adminClient.query<UpdateAsset.Mutation, UpdateAsset.Variables>(
-                UPDATE_ASSET,
-                {
-                    input: {
-                        id: firstAssetId,
-                        name: 'new name',
-                    },
+            const { updateAsset } = await adminClient.query(updateAssetDocument, {
+                input: {
+                    id: firstAssetId,
+                    name: 'new name',
                 },
-            );
+            });
 
             expect(updateAsset.name).toEqual('new name');
         });
 
         it('update focalPoint', async () => {
-            const { updateAsset } = await adminClient.query<UpdateAsset.Mutation, UpdateAsset.Variables>(
-                UPDATE_ASSET,
-                {
-                    input: {
-                        id: firstAssetId,
-                        focalPoint: {
-                            x: 0.3,
-                            y: 0.9,
-                        },
+            const { updateAsset } = await adminClient.query(updateAssetDocument, {
+                input: {
+                    id: firstAssetId,
+                    focalPoint: {
+                        x: 0.3,
+                        y: 0.9,
                     },
                 },
-            );
+            });
 
             expect(updateAsset.focalPoint).toEqual({
                 x: 0.3,
@@ -442,29 +424,23 @@ describe('Asset resolver', () => {
         });
 
         it('unset focalPoint', async () => {
-            const { updateAsset } = await adminClient.query<UpdateAsset.Mutation, UpdateAsset.Variables>(
-                UPDATE_ASSET,
-                {
-                    input: {
-                        id: firstAssetId,
-                        focalPoint: null,
-                    },
+            const { updateAsset } = await adminClient.query(updateAssetDocument, {
+                input: {
+                    id: firstAssetId,
+                    focalPoint: null,
                 },
-            );
+            });
 
             expect(updateAsset.focalPoint).toEqual(null);
         });
 
         it('update tags', async () => {
-            const { updateAsset } = await adminClient.query<UpdateAsset.Mutation, UpdateAsset.Variables>(
-                UPDATE_ASSET,
-                {
-                    input: {
-                        id: firstAssetId,
-                        tags: ['foo', 'quux'],
-                    },
+            const { updateAsset } = await adminClient.query(updateAssetDocument, {
+                input: {
+                    id: firstAssetId,
+                    tags: ['foo', 'quux'],
                 },
-            );
+            });
 
             expect(updateAsset.tags).toEqual([
                 { id: 'T_1', value: 'foo' },
@@ -473,105 +449,99 @@ describe('Asset resolver', () => {
         });
 
         it('remove tags', async () => {
-            const { updateAsset } = await adminClient.query<UpdateAsset.Mutation, UpdateAsset.Variables>(
-                UPDATE_ASSET,
-                {
-                    input: {
-                        id: firstAssetId,
-                        tags: [],
-                    },
+            const { updateAsset } = await adminClient.query(updateAssetDocument, {
+                input: {
+                    id: firstAssetId,
+                    tags: [],
                 },
-            );
+            });
 
             expect(updateAsset.tags).toEqual([]);
         });
     });
 
     describe('deleteAsset', () => {
-        let firstProduct: GetProductWithVariants.Product;
+        let firstProduct: NonNullable<ResultOf<typeof getProductWithVariantsDocument>['product']>;
+
+        const productGuard: ErrorResultGuard<
+            NonNullable<ResultOf<typeof getProductWithVariantsDocument>['product']>
+        > = createErrorResultGuard(input => input !== null);
+
+        const featuredAssetGuard: ErrorResultGuard<
+            NonNullable<
+                NonNullable<ResultOf<typeof getProductWithVariantsDocument>['product']>['featuredAsset']
+            >
+        > = createErrorResultGuard(input => input !== null);
 
         beforeAll(async () => {
-            const { product } = await adminClient.query<
-                GetProductWithVariants.Query,
-                GetProductWithVariants.Variables
-            >(GET_PRODUCT_WITH_VARIANTS, {
+            const { product } = await adminClient.query(getProductWithVariantsDocument, {
                 id: 'T_1',
             });
 
-            firstProduct = product!;
+            productGuard.assertSuccess(product);
+            firstProduct = product;
         });
 
         it('non-featured asset', async () => {
-            const { deleteAsset } = await adminClient.query<DeleteAsset.Mutation, DeleteAsset.Variables>(
-                DELETE_ASSET,
-                {
-                    input: {
-                        assetId: createdAssetId,
-                    },
+            const { deleteAsset } = await adminClient.query(deleteAssetDocument, {
+                input: {
+                    assetId: createdAssetId,
                 },
-            );
+            });
 
             expect(deleteAsset.result).toBe(DeletionResult.DELETED);
 
-            const { asset } = await adminClient.query<GetAsset.Query, GetAsset.Variables>(GET_ASSET, {
+            const { asset } = await adminClient.query(getAssetDocument, {
                 id: createdAssetId,
             });
             expect(asset).toBeNull();
         });
 
         it('featured asset not deleted', async () => {
-            const { deleteAsset } = await adminClient.query<DeleteAsset.Mutation, DeleteAsset.Variables>(
-                DELETE_ASSET,
-                {
-                    input: {
-                        assetId: firstProduct.featuredAsset!.id,
-                    },
+            featuredAssetGuard.assertSuccess(firstProduct.featuredAsset);
+            const { deleteAsset } = await adminClient.query(deleteAssetDocument, {
+                input: {
+                    assetId: firstProduct.featuredAsset.id,
                 },
-            );
+            });
 
             expect(deleteAsset.result).toBe(DeletionResult.NOT_DELETED);
-            expect(deleteAsset.message).toContain(`The selected Asset is featured by 1 Product`);
+            expect(deleteAsset.message).toContain('The selected Asset is featured by 1 Product');
 
-            const { asset } = await adminClient.query<GetAsset.Query, GetAsset.Variables>(GET_ASSET, {
+            const { asset } = await adminClient.query(getAssetDocument, {
                 id: firstAssetId,
             });
             expect(asset).not.toBeNull();
         });
 
         it('featured asset force deleted', async () => {
-            const { product: p1 } = await adminClient.query<
-                GetProductWithVariants.Query,
-                GetProductWithVariants.Variables
-            >(GET_PRODUCT_WITH_VARIANTS, {
+            const { product: p1 } = await adminClient.query(getProductWithVariantsDocument, {
                 id: firstProduct.id,
             });
-            expect(p1!.assets.length).toEqual(1);
+            productGuard.assertSuccess(p1);
+            expect(p1.assets.length).toEqual(1);
 
-            const { deleteAsset } = await adminClient.query<DeleteAsset.Mutation, DeleteAsset.Variables>(
-                DELETE_ASSET,
-                {
-                    input: {
-                        assetId: firstProduct.featuredAsset!.id,
-                        force: true,
-                    },
+            featuredAssetGuard.assertSuccess(firstProduct.featuredAsset);
+            const { deleteAsset } = await adminClient.query(deleteAssetDocument, {
+                input: {
+                    assetId: firstProduct.featuredAsset.id,
+                    force: true,
                 },
-            );
+            });
 
             expect(deleteAsset.result).toBe(DeletionResult.DELETED);
 
-            const { asset } = await adminClient.query<GetAsset.Query, GetAsset.Variables>(GET_ASSET, {
+            const { asset } = await adminClient.query(getAssetDocument, {
                 id: firstAssetId,
             });
             expect(asset).not.toBeNull();
 
-            const { product } = await adminClient.query<
-                GetProductWithVariants.Query,
-                GetProductWithVariants.Variables
-            >(GET_PRODUCT_WITH_VARIANTS, {
+            const { product } = await adminClient.query(getProductWithVariantsDocument, {
                 id: firstProduct.id,
             });
-            expect(product!.featuredAsset).toBeNull();
-            expect(product!.assets.length).toEqual(0);
+            productGuard.assertSuccess(product);
+            expect(product.featuredAsset).toBeNull();
+            expect(product.assets.length).toEqual(0);
         });
     });
 });

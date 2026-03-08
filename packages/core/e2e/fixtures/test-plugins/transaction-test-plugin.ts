@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/restrict-template-expressions */
 import { Injectable, OnApplicationBootstrap } from '@nestjs/common';
 import { Args, Mutation, Query, Resolver } from '@nestjs/graphql';
 import {
@@ -16,9 +17,13 @@ import {
 } from '@vendure/core';
 import gql from 'graphql-tag';
 import { ReplaySubject, Subscription } from 'rxjs';
+import { vi } from 'vitest';
 
 export class TestEvent extends VendureEvent {
-    constructor(public ctx: RequestContext, public administrator: Administrator) {
+    constructor(
+        public ctx: RequestContext,
+        public administrator: Administrator,
+    ) {
         super();
     }
 }
@@ -56,7 +61,10 @@ class TestUserService {
 
 @Injectable()
 class TestAdminService {
-    constructor(private connection: TransactionalConnection, private userService: TestUserService) {}
+    constructor(
+        private connection: TransactionalConnection,
+        private userService: TestUserService,
+    ) {}
 
     async createAdministrator(ctx: RequestContext, emailAddress: string, fail: boolean) {
         const user = await this.userService.createUser(ctx, emailAddress);
@@ -89,7 +97,7 @@ class TestResolver {
     @Transaction()
     async createTestAdministrator(@Ctx() ctx: RequestContext, @Args() args: any) {
         const admin = await this.testAdminService.createAdministrator(ctx, args.emailAddress, args.fail);
-        this.eventBus.publish(new TestEvent(ctx, admin));
+        await this.eventBus.publish(new TestEvent(ctx, admin));
         return admin;
     }
 
@@ -111,7 +119,7 @@ class TestResolver {
     @Transaction()
     async createTestAdministrator4(@Ctx() ctx: RequestContext, @Args() args: any) {
         const admin = await this.testAdminService.createAdministrator(ctx, args.emailAddress, args.fail);
-        this.eventBus.publish(new TestEvent(ctx, admin));
+        await this.eventBus.publish(new TestEvent(ctx, admin));
         await new Promise(resolve => setTimeout(resolve, 50));
         return admin;
     }
@@ -144,7 +152,7 @@ class TestResolver {
     async createNTestAdministrators(@Ctx() ctx: RequestContext, @Args() args: any) {
         let error: any;
 
-        const promises: Promise<any>[] = [];
+        const promises: Array<Promise<any>> = [];
         for (let i = 0; i < args.n; i++) {
             promises.push(
                 new Promise(resolve => setTimeout(resolve, i * 10))
@@ -155,8 +163,8 @@ class TestResolver {
                             i < args.n * args.failFactor,
                         ),
                     )
-                    .then(admin => {
-                        this.eventBus.publish(new TestEvent(ctx, admin));
+                    .then(async admin => {
+                        await this.eventBus.publish(new TestEvent(ctx, admin));
                         return admin;
                     }),
             );
@@ -179,7 +187,7 @@ class TestResolver {
     async createNTestAdministrators2(@Ctx() ctx: RequestContext, @Args() args: any) {
         let error: any;
 
-        const promises: Promise<any>[] = [];
+        const promises: Array<Promise<any>> = [];
         const result = await this.connection
             .withTransaction(ctx, _ctx => {
                 for (let i = 0; i < args.n; i++) {
@@ -228,12 +236,14 @@ class TestResolver {
                     this.createNTestAdministrators3(_ctx, {
                         ...args,
                         n: args.n - 1,
-                        failFactor: args.n * args.failFactor / (args.n - 1)
-                    })
+                        failFactor: (args.n * args.failFactor) / (args.n - 1),
+                    }),
                 );
-    
+
                 result.push(...admins);
-            } catch(e) {}
+            } catch (e) {
+                /* */
+            }
         }
 
         return result;
@@ -252,8 +262,8 @@ class TestResolver {
     // Promise.allSettled polyfill
     // Same as Promise.all but waits until all promises will be fulfilled or rejected.
     private allSettled<T>(
-        promises: Promise<T>[],
-    ): Promise<({ status: 'fulfilled'; value: T } | { status: 'rejected'; reason: any })[]> {
+        promises: Array<Promise<T>>,
+    ): Promise<Array<{ status: 'fulfilled'; value: T } | { status: 'rejected'; reason: any }>> {
         return Promise.all(
             promises.map((promise, i) =>
                 promise
@@ -302,11 +312,14 @@ class TestResolver {
 })
 export class TransactionTestPlugin implements OnApplicationBootstrap {
     private subscription: Subscription;
-    static callHandler = jest.fn();
-    static errorHandler = jest.fn();
+    static callHandler = vi.fn();
+    static errorHandler = vi.fn();
     static eventHandlerComplete$ = new ReplaySubject(1);
 
-    constructor(private eventBus: EventBus, private connection: TransactionalConnection) {}
+    constructor(
+        private eventBus: EventBus,
+        private connection: TransactionalConnection,
+    ) {}
 
     static reset() {
         this.eventHandlerComplete$ = new ReplaySubject(1);
@@ -331,7 +344,7 @@ export class TransactionTestPlugin implements OnApplicationBootstrap {
                 administrator.lastName = 'modified';
                 try {
                     await adminRepository.save(administrator);
-                } catch (e) {
+                } catch (e: any) {
                     TransactionTestPlugin.errorHandler(e);
                 } finally {
                     TransactionTestPlugin.eventHandlerComplete$.complete();
@@ -342,8 +355,8 @@ export class TransactionTestPlugin implements OnApplicationBootstrap {
                 // note the ctx is not passed here, so we are not inside the ongoing transaction
                 const adminRepository = this.connection.getRepository(Administrator);
                 try {
-                    await adminRepository.findOneOrFail(administrator.id);
-                } catch (e) {
+                    await adminRepository.findOneOrFail({ where: { id: administrator.id } });
+                } catch (e: any) {
                     TransactionTestPlugin.errorHandler(e);
                 } finally {
                     TransactionTestPlugin.eventHandlerComplete$.complete();

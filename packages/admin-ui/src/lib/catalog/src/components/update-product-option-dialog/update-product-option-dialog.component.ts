@@ -1,13 +1,14 @@
 import { ChangeDetectionStrategy, Component, OnInit } from '@angular/core';
-import { FormControl, FormGroup } from '@angular/forms';
+import { UntypedFormControl, UntypedFormGroup } from '@angular/forms';
 import {
     CustomFieldConfig,
     LanguageCode,
-    ProductVariant,
+    ProductVariantFragment,
     UpdateProductOptionInput,
+    createUpdatedTranslatable,
+    Dialog,
 } from '@vendure/admin-ui/core';
-import { createUpdatedTranslatable } from '@vendure/admin-ui/core';
-import { Dialog } from '@vendure/admin-ui/core';
+
 import { normalizeString } from '@vendure/common/lib/normalize-string';
 
 @Component({
@@ -15,19 +16,21 @@ import { normalizeString } from '@vendure/common/lib/normalize-string';
     templateUrl: './update-product-option-dialog.component.html',
     styleUrls: ['./update-product-option-dialog.component.scss'],
     changeDetection: ChangeDetectionStrategy.OnPush,
+    standalone: false,
 })
 export class UpdateProductOptionDialogComponent
-    implements Dialog<UpdateProductOptionInput & { autoUpdate: boolean }>, OnInit {
+    implements Dialog<UpdateProductOptionInput & { autoUpdate: boolean }>, OnInit
+{
     resolveWith: (result?: UpdateProductOptionInput & { autoUpdate: boolean }) => void;
     updateVariantName = true;
     // Provided by caller
-    productOption: ProductVariant.Options;
+    productOption: ProductVariantFragment['options'][number];
     activeLanguage: LanguageCode;
     name: string;
     code: string;
     customFields: CustomFieldConfig[];
     codeInputTouched = false;
-    customFieldsForm: FormGroup;
+    customFieldsForm: UntypedFormGroup;
 
     ngOnInit(): void {
         const currentTranslation = this.productOption.translations.find(
@@ -35,7 +38,7 @@ export class UpdateProductOptionDialogComponent
         );
         this.name = currentTranslation?.name ?? '';
         this.code = this.productOption.code;
-        this.customFieldsForm = new FormGroup({});
+        this.customFieldsForm = new UntypedFormGroup({});
         if (this.customFields) {
             const cfCurrentTranslation =
                 (currentTranslation && (currentTranslation as any).customFields) || {};
@@ -46,7 +49,7 @@ export class UpdateProductOptionDialogComponent
                     fieldDef.type === 'localeString'
                         ? cfCurrentTranslation[key]
                         : (this.productOption as any).customFields[key];
-                this.customFieldsForm.addControl(fieldDef.name, new FormControl(value));
+                this.customFieldsForm.addControl(fieldDef.name, new UntypedFormControl(value));
             }
         }
     }

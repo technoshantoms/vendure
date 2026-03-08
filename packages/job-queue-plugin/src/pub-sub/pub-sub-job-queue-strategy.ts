@@ -13,8 +13,21 @@ import {
 import { loggerCtx, PUB_SUB_OPTIONS } from './constants';
 import { PubSubOptions } from './options';
 
+/**
+ * @description
+ * This JobQueueStrategy uses Google Cloud Pub/Sub to implement a job queue for Vendure.
+ * It should not be used alone, but as part of the {@link PubSubPlugin}.
+ *
+ * Note: To use this strategy, you need to manually install the `@google-cloud/pubsub` package:
+ *
+ * ```shell
+ * npm install @google-cloud/pubsub@^4.11.0
+ * ```
+ *
+ * @docsCategory core plugins/JobQueuePlugin
+ */
 export class PubSubJobQueueStrategy extends InjectableJobQueueStrategy implements JobQueueStrategy {
-    private concurrency: number;
+    private concurrency: number | ((queueName: string) => number);
     private queueNamePubSubPair: Map<string, [string, string]>;
     private pubSubClient: PubSub;
     private topics = new Map<string, Topic>();
@@ -30,6 +43,13 @@ export class PubSubJobQueueStrategy extends InjectableJobQueueStrategy implement
         super.init(injector);
     }
 
+    private getConcurrency(queueName: string): number {
+        if (typeof this.concurrency === 'function') {
+            return this.concurrency(queueName);
+        }
+        return this.concurrency;
+    }
+
     destroy() {
         super.destroy();
         for (const subscription of this.subscriptions.values()) {
@@ -39,7 +59,7 @@ export class PubSubJobQueueStrategy extends InjectableJobQueueStrategy implement
         this.topics.clear();
     }
 
-    async add<Data extends JobData<Data> = {}>(job: Job<Data>): Promise<Job<Data>> {
+    async add<Data extends JobData<Data> = object>(job: Job<Data>): Promise<Job<Data>> {
         if (!this.hasInitialized) {
             throw new Error('Cannot add job before init');
         }
@@ -57,7 +77,7 @@ export class PubSubJobQueueStrategy extends InjectableJobQueueStrategy implement
         });
     }
 
-    async start<Data extends JobData<Data> = {}>(
+    async start<Data extends JobData<Data> = object>(
         queueName: string,
         process: (job: Job<Data>) => Promise<any>,
     ) {
@@ -71,8 +91,9 @@ export class PubSubJobQueueStrategy extends InjectableJobQueueStrategy implement
         }
 
         const subscription = this.subscription(queueName);
-        const listener = (message: Message) => {
-            Logger.debug(`Received message: ${queueName}: ${message.id}`, loggerCtx);
+
+        const processMessage = async (message: Message) => {
+            Logger.verbose(`Received message: ${queueName}: ${message.id}`, loggerCtx);
 
             const job = new Job<Data>({
                 id: message.id,
@@ -84,19 +105,28 @@ export class PubSubJobQueueStrategy extends InjectableJobQueueStrategy implement
                 createdAt: message.publishTime,
             });
 
-            process(job)
+            await process(job);
+        };
+
+        const listener = (message: Message) => {
+            processMessage(message)
                 .then(() => {
                     message.ack();
+                    Logger.verbose(`Finished handling: ${queueName}: ${message.id}`, loggerCtx);
                 })
                 .catch(err => {
                     message.nack();
+                    Logger.error(
+                        `Error handling: ${queueName}: ${message.id}: ${String(err.message)}`,
+                        loggerCtx,
+                    );
                 });
         };
         this.listeners.set(queueName, process, listener);
         subscription.on('message', listener);
     }
 
-    async stop<Data extends JobData<Data> = {}>(
+    async stop<Data extends JobData<Data> = object>(
         queueName: string,
         process: (job: Job<Data>) => Promise<any>,
     ) {
@@ -139,7 +169,7 @@ export class PubSubJobQueueStrategy extends InjectableJobQueueStrategy implement
         const [topicName, subscriptionName] = pair;
         subscription = this.topic(queueName).subscription(subscriptionName, {
             flowControl: {
-                maxMessages: this.concurrency,
+                maxMessages: this.getConcurrency(queueName),
             },
         });
         this.subscriptions.set(queueName, subscription);

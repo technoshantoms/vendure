@@ -1,6 +1,11 @@
 import { Pipe, PipeTransform } from '@angular/core';
 
-import { CustomFieldConfig, LanguageCode, StringFieldOption } from '../../common/generated-types';
+import {
+    CustomFieldConfig,
+    LanguageCode,
+    LocalizedString,
+    StringFieldOption,
+} from '../../common/generated-types';
 
 /**
  * Displays a localized label for a CustomField or StringFieldOption, falling back to the
@@ -9,11 +14,19 @@ import { CustomFieldConfig, LanguageCode, StringFieldOption } from '../../common
 @Pipe({
     name: 'customFieldLabel',
     pure: true,
+    standalone: false,
 })
 export class CustomFieldLabelPipe implements PipeTransform {
-    transform(value: CustomFieldConfig | StringFieldOption, uiLanguageCode: LanguageCode | null): string {
+    transform(
+        value: CustomFieldConfig | StringFieldOption | LocalizedString[],
+        uiLanguageCode: LanguageCode | null,
+    ): string {
         if (!value) {
             return value;
+        }
+        if (Array.isArray(value)) {
+            const match = value.find(l => l.languageCode === uiLanguageCode);
+            return match ? match.value : value[0].value;
         }
         const { label } = value;
         const name = this.isCustomFieldConfig(value) ? value.name : value.value;

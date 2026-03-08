@@ -6,22 +6,29 @@ import {
     DeletionResult,
     UpdateProductOptionInput,
 } from '@vendure/common/lib/generated-types';
-import { ID } from '@vendure/common/lib/shared-types';
+import { ID, PaginatedList } from '@vendure/common/lib/shared-types';
+import { IsNull } from 'typeorm';
 
+import { RelationPaths } from '../../api';
 import { RequestContext } from '../../api/common/request-context';
+import { ListQueryOptions } from '../../common';
+import { Instrument } from '../../common/instrument-decorator';
 import { Translated } from '../../common/types/locale-types';
 import { assertFound } from '../../common/utils';
-import { Logger } from '../../config/index';
+import { Logger } from '../../config/logger/vendure-logger';
 import { TransactionalConnection } from '../../connection/transactional-connection';
-import { ProductVariant } from '../../entity/index';
 import { ProductOptionGroup } from '../../entity/product-option-group/product-option-group.entity';
 import { ProductOptionTranslation } from '../../entity/product-option/product-option-translation.entity';
 import { ProductOption } from '../../entity/product-option/product-option.entity';
+import { ProductVariant } from '../../entity/product-variant/product-variant.entity';
 import { EventBus } from '../../event-bus';
 import { ProductOptionEvent } from '../../event-bus/events/product-option-event';
 import { CustomFieldRelationService } from '../helpers/custom-field-relation/custom-field-relation.service';
+import { ListQueryBuilder } from '../helpers/list-query-builder/list-query-builder';
 import { TranslatableSaver } from '../helpers/translatable-saver/translatable-saver';
 import { TranslatorService } from '../helpers/translator/translator.service';
+
+import { ChannelService } from './channel.service';
 
 /**
  * @description
@@ -30,6 +37,7 @@ import { TranslatorService } from '../helpers/translator/translator.service';
  * @docsCategory services
  */
 @Injectable()
+@Instrument()
 export class ProductOptionService {
     constructor(
         private connection: TransactionalConnection,
@@ -37,24 +45,49 @@ export class ProductOptionService {
         private customFieldRelationService: CustomFieldRelationService,
         private eventBus: EventBus,
         private translator: TranslatorService,
+        private listQueryBuilder: ListQueryBuilder,
+        private channelService: ChannelService,
     ) {}
 
-    findAll(ctx: RequestContext): Promise<Array<Translated<ProductOption>>> {
-        return this.connection
-            .getRepository(ctx, ProductOption)
-            .find({
-                relations: ['group'],
-            })
-            .then(options => options.map(option => this.translator.translate(option, ctx)));
+    findAll(
+        ctx: RequestContext,
+        options?: ListQueryOptions<ProductOption>,
+        groupId?: ID,
+        relations?: RelationPaths<ProductOption>,
+    ): Promise<PaginatedList<Translated<ProductOption>>> {
+        const qb = this.listQueryBuilder.build(ProductOption, options, {
+            entityAlias: 'option',
+            ctx,
+            channelId: ctx.channelId,
+            where: {
+                deletedAt: IsNull(),
+            },
+            relations,
+        });
+        if (groupId) {
+            qb.andWhere('option.groupId = :groupId', { groupId });
+        }
+        return qb.getManyAndCount().then(([items, totalItems]) => ({
+            items: items.map(option => this.translator.translate(option, ctx)),
+            totalItems,
+        }));
     }
 
-    findOne(ctx: RequestContext, id: ID): Promise<Translated<ProductOption> | undefined> {
+    findOne(
+        ctx: RequestContext,
+        id: ID,
+        relations?: RelationPaths<ProductOption>,
+    ): Promise<Translated<ProductOption> | undefined> {
         return this.connection
-            .getRepository(ctx, ProductOption)
-            .findOne(id, {
-                relations: ['group'],
+            .findOneInChannel(ctx, ProductOption, id, ctx.channelId, {
+                relations: relations ?? ['group'],
             })
-            .then(option => option && this.translator.translate(option, ctx));
+            .then(option => {
+                if (!option || option.deletedAt) {
+                    return undefined;
+                }
+                return this.translator.translate(option, ctx);
+            });
     }
 
     async create(
@@ -71,7 +104,10 @@ export class ProductOptionService {
             input,
             entityType: ProductOption,
             translationType: ProductOptionTranslation,
-            beforeSave: po => (po.group = productOptionGroup),
+            beforeSave: async po => {
+                po.group = productOptionGroup;
+                await this.channelService.assignToCurrentChannel(po, ctx);
+            },
         });
         const optionWithRelations = await this.customFieldRelationService.updateRelations(
             ctx,
@@ -79,7 +115,7 @@ export class ProductOptionService {
             input as CreateProductOptionInput,
             option,
         );
-        this.eventBus.publish(new ProductOptionEvent(ctx, optionWithRelations, 'created', input));
+        await this.eventBus.publish(new ProductOptionEvent(ctx, optionWithRelations, 'created', input));
         return assertFound(this.findOne(ctx, option.id));
     }
 
@@ -91,7 +127,7 @@ export class ProductOptionService {
             translationType: ProductOptionTranslation,
         });
         await this.customFieldRelationService.updateRelations(ctx, ProductOption, input, option);
-        this.eventBus.publish(new ProductOptionEvent(ctx, option, 'updated', input));
+        await this.eventBus.publish(new ProductOptionEvent(ctx, option, 'updated', input));
         return assertFound(this.findOne(ctx, option.id));
     }
 
@@ -125,18 +161,12 @@ export class ProductOptionService {
         } else {
             // hard delete
             try {
-                // TODO: V2 rely on onDelete: CASCADE rather than this manual loop
-                for (const translation of productOption.translations) {
-                    await this.connection
-                        .getRepository(ctx, ProductOptionTranslation)
-                        .remove(translation as ProductOptionTranslation);
-                }
                 await this.connection.getRepository(ctx, ProductOption).remove(productOption);
             } catch (e: any) {
                 Logger.error(e.message, undefined, e.stack);
             }
         }
-        this.eventBus.publish(new ProductOptionEvent(ctx, deletedProductOption, 'deleted', id));
+        await this.eventBus.publish(new ProductOptionEvent(ctx, deletedProductOption, 'deleted', id));
         return {
             result: DeletionResult.DELETED,
         };

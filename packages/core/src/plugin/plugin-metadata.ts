@@ -3,13 +3,15 @@ import { MODULE_METADATA } from '@nestjs/common/constants';
 import { Type } from '@vendure/common/lib/shared-types';
 import { notNullOrUndefined } from '@vendure/common/lib/shared-utils';
 
-import { APIExtensionDefinition, PluginConfigurationFn } from './vendure-plugin';
+import { APIExtensionDefinition, DashboardExtension, PluginConfigurationFn } from './vendure-plugin';
 
 export const PLUGIN_METADATA = {
     CONFIGURATION: 'configuration',
     SHOP_API_EXTENSIONS: 'shopApiExtensions',
     ADMIN_API_EXTENSIONS: 'adminApiExtensions',
     ENTITIES: 'entities',
+    COMPATIBILITY: 'compatibility',
+    DASHBOARD: 'dashboard',
 };
 
 export function getEntitiesFromPlugins(plugins?: Array<Type<any> | DynamicModule>): Array<Type<any>> {
@@ -19,7 +21,7 @@ export function getEntitiesFromPlugins(plugins?: Array<Type<any> | DynamicModule
     return plugins
         .map(p => reflectMetadata(p, PLUGIN_METADATA.ENTITIES))
         .reduce((all, entities) => {
-            const resolvedEntities = typeof entities === 'function' ? entities() : entities ?? [];
+            const resolvedEntities = typeof entities === 'function' ? entities() : (entities ?? []);
             return [...all, ...resolvedEntities];
         }, []);
 }
@@ -45,8 +47,14 @@ export function getPluginAPIExtensions(
     return extensions.filter(notNullOrUndefined);
 }
 
-export function getPluginModules(plugins: Array<Type<any> | DynamicModule>): Array<Type<any>> {
-    return plugins.map(p => (isDynamicModule(p) ? p.module : p));
+export function getPluginDashboardExtensions(
+    plugins: Array<Type<any> | DynamicModule>,
+): DashboardExtension[] {
+    return plugins.map(p => reflectMetadata(p, PLUGIN_METADATA.DASHBOARD)).filter(notNullOrUndefined);
+}
+
+export function getCompatibility(plugin: Type<any> | DynamicModule): string | undefined {
+    return reflectMetadata(plugin, PLUGIN_METADATA.COMPATIBILITY);
 }
 
 export function getConfigurationFunction(
@@ -67,7 +75,7 @@ export function graphQLResolversFor(
     return apiExtensions
         ? typeof apiExtensions.resolvers === 'function'
             ? apiExtensions.resolvers()
-            : apiExtensions.resolvers ?? []
+            : (apiExtensions.resolvers ?? [])
         : [];
 }
 

@@ -24,19 +24,11 @@ import { DataService } from '../../../data/providers/data.service';
  * @example
  * ```HTML
  * <vdr-facet-value-selector
- *   [facets]="facets"
  *   (selectedValuesChange)="selectedValues = $event"
  * ></vdr-facet-value-selector>
  * ```
- * The `facets` input should be provided from the parent component
- * like this:
+ * The `selectedValuesChange` event will emit an array of `FacetValue` objects.
  *
- * @example
- * ```TypeScript
- * this.facets = this.dataService
- *   .facet.getAllFacets()
- *   .mapSingle(data => data.facets.items);
- * ```
  * @docsCategory components
  */
 @Component({
@@ -51,6 +43,7 @@ import { DataService } from '../../../data/providers/data.service';
             multi: true,
         },
     ],
+    standalone: false,
 })
 export class FacetValueSelectorComponent implements OnInit, OnDestroy, ControlValueAccessor {
     @Output() selectedValuesChange = new EventEmitter<FacetValueFragment[]>();
@@ -68,7 +61,10 @@ export class FacetValueSelectorComponent implements OnInit, OnDestroy, ControlVa
     disabled = false;
     value: Array<string | FacetValueFragment>;
     private subscription: Subscription;
-    constructor(private dataService: DataService, private changeDetectorRef: ChangeDetectorRef) {}
+    constructor(
+        private dataService: DataService,
+        private changeDetectorRef: ChangeDetectorRef,
+    ) {}
 
     ngOnInit(): void {
         this.initSearchResults();
@@ -84,7 +80,7 @@ export class FacetValueSelectorComponent implements OnInit, OnDestroy, ControlVa
                     return of([]);
                 }
                 return this.dataService.facet
-                    .getFacetValues({ take: 10, filter: { name: { contains: term } } })
+                    .getFacetValues({ take: 100, filter: { name: { contains: term } } })
                     .mapSingle(result => result.facetValues.items);
             }),
             tap(() => (this.searchLoading = false)),
@@ -96,7 +92,7 @@ export class FacetValueSelectorComponent implements OnInit, OnDestroy, ControlVa
                         return of([]);
                     }
                     return this.dataService.facet
-                        .getFacetValues({ take: 10, filter: { id: { in: ids } } }, 'cache-first')
+                        .getFacetValues({ take: 100, filter: { id: { in: ids } } }, 'cache-first')
                         .mapSingle(result => result.facetValues.items);
                 }),
             )
@@ -115,6 +111,9 @@ export class FacetValueSelectorComponent implements OnInit, OnDestroy, ControlVa
     onChange(selected: FacetValueFragment[]) {
         if (this.readonly) {
             return;
+        }
+        for (const sel of selected) {
+            console.log(`selected: ${sel.facet.name}:${sel.code}`);
         }
         this.selectedValuesChange.emit(selected);
         if (this.onChangeFn) {
@@ -139,7 +138,7 @@ export class FacetValueSelectorComponent implements OnInit, OnDestroy, ControlVa
         this.ngSelect.focus();
     }
 
-    writeValue(obj: string | FacetValue.Fragment[] | Array<string | number> | null): void {
+    writeValue(obj: string | FacetValueFragment[] | Array<string | number> | null): void {
         let valueIds: string[] | undefined;
         if (typeof obj === 'string') {
             try {

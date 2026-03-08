@@ -1,6 +1,5 @@
 import { Module, OnApplicationBootstrap, OnApplicationShutdown } from '@nestjs/common';
 import { ModuleRef } from '@nestjs/core';
-import { notNullOrUndefined } from '@vendure/common/lib/shared-utils';
 
 import { ConfigurableOperationDef } from '../common/configurable-operation';
 import { Injector } from '../common/injector';
@@ -14,7 +13,10 @@ import { ConfigService } from './config.service';
     exports: [ConfigService],
 })
 export class ConfigModule implements OnApplicationBootstrap, OnApplicationShutdown {
-    constructor(private configService: ConfigService, private moduleRef: ModuleRef) {}
+    constructor(
+        private configService: ConfigService,
+        private moduleRef: ModuleRef,
+    ) {}
 
     async onApplicationBootstrap() {
         await this.initInjectableStrategies();
@@ -67,40 +69,61 @@ export class ConfigModule implements OnApplicationBootstrap, OnApplicationShutdo
     private getInjectableStrategies(): InjectableStrategy[] {
         const { assetNamingStrategy, assetPreviewStrategy, assetStorageStrategy } =
             this.configService.assetOptions;
-        const { productVariantPriceCalculationStrategy, stockDisplayStrategy } =
-            this.configService.catalogOptions;
+        const {
+            productVariantPriceCalculationStrategy,
+            productVariantPriceSelectionStrategy,
+            productVariantPriceUpdateStrategy,
+            stockDisplayStrategy,
+            stockLocationStrategy,
+        } = this.configService.catalogOptions;
         const {
             adminAuthenticationStrategy,
             shopAuthenticationStrategy,
             sessionCacheStrategy,
             passwordHashingStrategy,
             passwordValidationStrategy,
+            verificationTokenStrategy,
+            adminApiKeyStrategy,
+            shopApiKeyStrategy,
+            entityAccessControlStrategy,
         } = this.configService.authOptions;
         const { taxZoneStrategy, taxLineCalculationStrategy } = this.configService.taxOptions;
         const { jobQueueStrategy, jobBufferStorageStrategy } = this.configService.jobQueueOptions;
+        const { schedulerStrategy } = this.configService.schedulerOptions;
         const {
             mergeStrategy,
             checkoutMergeStrategy,
             orderItemPriceCalculationStrategy,
-            process,
+            process: orderProcess,
             orderCodeStrategy,
             orderByCodeAccessStrategy,
             stockAllocationStrategy,
             activeOrderStrategy,
             changedPriceHandlingStrategy,
+            orderSellerStrategy,
+            guestCheckoutStrategy,
+            orderInterceptors,
         } = this.configService.orderOptions;
-        const { customFulfillmentProcess } = this.configService.shippingOptions;
-        const { customPaymentProcess } = this.configService.paymentOptions;
+        const {
+            customFulfillmentProcess,
+            process: fulfillmentProcess,
+            shippingLineAssignmentStrategy,
+        } = this.configService.shippingOptions;
+        const { customPaymentProcess, process: paymentProcess } = this.configService.paymentOptions;
         const { entityIdStrategy: entityIdStrategyDeprecated } = this.configService;
-        const { entityIdStrategy } = this.configService.entityOptions;
-        const { healthChecks } = this.configService.systemOptions;
+        const { entityIdStrategy: entityIdStrategyCurrent } = this.configService.entityOptions;
+        const { healthChecks, errorHandlers } = this.configService.systemOptions;
         const { assetImportStrategy } = this.configService.importExportOptions;
+        const { refundProcess: refundProcess } = this.configService.paymentOptions;
+        const { cacheStrategy, instrumentationStrategy } = this.configService.systemOptions;
+        const entityIdStrategy = entityIdStrategyCurrent ?? entityIdStrategyDeprecated;
         return [
             ...adminAuthenticationStrategy,
             ...shopAuthenticationStrategy,
             sessionCacheStrategy,
             passwordHashingStrategy,
             passwordValidationStrategy,
+            verificationTokenStrategy,
             assetNamingStrategy,
             assetPreviewStrategy,
             assetStorageStrategy,
@@ -112,25 +135,42 @@ export class ConfigModule implements OnApplicationBootstrap, OnApplicationShutdo
             checkoutMergeStrategy,
             orderCodeStrategy,
             orderByCodeAccessStrategy,
-            entityIdStrategyDeprecated,
-            ...[entityIdStrategy].filter(notNullOrUndefined),
+            entityIdStrategy,
             productVariantPriceCalculationStrategy,
+            productVariantPriceUpdateStrategy,
             orderItemPriceCalculationStrategy,
-            ...process,
+            ...orderProcess,
             ...customFulfillmentProcess,
+            ...fulfillmentProcess,
             ...customPaymentProcess,
+            ...paymentProcess,
             stockAllocationStrategy,
             stockDisplayStrategy,
             ...healthChecks,
+            ...errorHandlers,
             assetImportStrategy,
             changedPriceHandlingStrategy,
             ...(Array.isArray(activeOrderStrategy) ? activeOrderStrategy : [activeOrderStrategy]),
+            orderSellerStrategy,
+            shippingLineAssignmentStrategy,
+            stockLocationStrategy,
+            productVariantPriceSelectionStrategy,
+            guestCheckoutStrategy,
+            ...refundProcess,
+            cacheStrategy,
+            ...(instrumentationStrategy ? [instrumentationStrategy] : []),
+            ...orderInterceptors,
+            schedulerStrategy,
+            adminApiKeyStrategy,
+            shopApiKeyStrategy,
+            entityAccessControlStrategy,
         ];
     }
 
     private getConfigurableOperations(): Array<ConfigurableOperationDef<any>> {
         const { paymentMethodHandlers, paymentMethodEligibilityCheckers } = this.configService.paymentOptions;
         const { collectionFilters } = this.configService.catalogOptions;
+        const { entityDuplicators } = this.configService.entityOptions;
         const { promotionActions, promotionConditions } = this.configService.promotionOptions;
         const { shippingCalculators, shippingEligibilityCheckers, fulfillmentHandlers } =
             this.configService.shippingOptions;
@@ -143,6 +183,7 @@ export class ConfigModule implements OnApplicationBootstrap, OnApplicationShutdo
             ...(shippingCalculators || []),
             ...(shippingEligibilityCheckers || []),
             ...(fulfillmentHandlers || []),
+            ...(entityDuplicators || []),
         ];
     }
 }

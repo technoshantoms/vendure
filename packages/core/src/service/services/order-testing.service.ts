@@ -10,10 +10,10 @@ import {
 import { ID } from '@vendure/common/lib/shared-types';
 
 import { RequestContext } from '../../api/common/request-context';
+import { Instrument } from '../../common/instrument-decorator';
 import { grossPriceOf, netPriceOf } from '../../common/tax-utils';
 import { ConfigService } from '../../config/config.service';
 import { TransactionalConnection } from '../../connection/transactional-connection';
-import { OrderItem } from '../../entity/order-item/order-item.entity';
 import { OrderLine } from '../../entity/order-line/order-line.entity';
 import { Order } from '../../entity/order/order.entity';
 import { ProductVariant } from '../../entity/product-variant/product-variant.entity';
@@ -33,6 +33,7 @@ import { TranslatorService } from '../helpers/translator/translator.service';
  * @docsCategory services
  */
 @Injectable()
+@Instrument()
 export class OrderTestingService {
     constructor(
         private connection: TransactionalConnection,
@@ -127,8 +128,11 @@ export class OrderTestingService {
             await this.productPriceApplicator.applyChannelPriceAndTax(productVariant, ctx, mockOrder);
             const orderLine = new OrderLine({
                 productVariant,
-                items: [],
+                adjustments: [],
+                taxLines: [],
+                quantity: line.quantity,
                 taxCategory: productVariant.taxCategory,
+                taxCategoryId: productVariant.taxCategoryId,
             });
             mockOrder.lines.push(orderLine);
 
@@ -136,20 +140,12 @@ export class OrderTestingService {
                 ctx,
                 productVariant,
                 orderLine.customFields || {},
-                mockOrder
+                mockOrder,
+                orderLine.quantity,
             );
             const taxRate = productVariant.taxRateApplied;
-            const unitPrice = priceIncludesTax ? taxRate.netPriceOf(price) : price;
-
-            for (let i = 0; i < line.quantity; i++) {
-                const orderItem = new OrderItem({
-                    listPrice: price,
-                    listPriceIncludesTax: priceIncludesTax,
-                    adjustments: [],
-                    taxLines: [],
-                });
-                orderLine.items.push(orderItem);
-            }
+            orderLine.listPrice = price;
+            orderLine.listPriceIncludesTax = priceIncludesTax;
         }
         mockOrder.shippingLines = [
             new ShippingLine({

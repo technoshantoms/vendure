@@ -1,5 +1,5 @@
 import { ChangeDetectionStrategy, ChangeDetectorRef, Component, OnInit } from '@angular/core';
-import { FormControl } from '@angular/forms';
+import { UntypedFormControl } from '@angular/forms';
 import {
     configurableDefinitionToInstance,
     ConfigurableOperation,
@@ -9,7 +9,6 @@ import {
     Dialog,
     FulfillOrderInput,
     GlobalFlag,
-    OrderDetail,
     OrderDetailFragment,
     toConfigurableOperationInput,
 } from '@vendure/admin-ui/core';
@@ -19,18 +18,22 @@ import {
     templateUrl: './fulfill-order-dialog.component.html',
     styleUrls: ['./fulfill-order-dialog.component.scss'],
     changeDetection: ChangeDetectionStrategy.OnPush,
+    standalone: false,
 })
 export class FulfillOrderDialogComponent implements Dialog<FulfillOrderInput>, OnInit {
     resolveWith: (result?: FulfillOrderInput) => void;
     fulfillmentHandlerDef: ConfigurableOperationDefinition;
     fulfillmentHandler: ConfigurableOperation;
-    fulfillmentHandlerControl = new FormControl();
+    fulfillmentHandlerControl = new UntypedFormControl();
     fulfillmentQuantities: { [lineId: string]: { fulfillCount: number; max: number } } = {};
 
     // Provided by modalService.fromComponent() call
     order: OrderDetailFragment;
 
-    constructor(private dataService: DataService, private changeDetector: ChangeDetectorRef) {}
+    constructor(
+        private dataService: DataService,
+        private changeDetector: ChangeDetectorRef,
+    ) {}
 
     ngOnInit(): void {
         this.dataService.settings.getGlobalSettings().single$.subscribe(({ globalSettings }) => {
@@ -58,7 +61,7 @@ export class FulfillOrderDialogComponent implements Dialog<FulfillOrderInput>, O
             });
     }
 
-    getFulfillableCount(line: OrderDetail.Lines, globalTrackInventory: boolean): number {
+    getFulfillableCount(line: OrderDetailFragment['lines'][number], globalTrackInventory: boolean): number {
         const { trackInventory, stockOnHand } = line.productVariant;
         const effectiveTracInventory =
             trackInventory === GlobalFlag.INHERIT ? globalTrackInventory : trackInventory === GlobalFlag.TRUE;
@@ -67,12 +70,13 @@ export class FulfillOrderDialogComponent implements Dialog<FulfillOrderInput>, O
         return effectiveTracInventory ? Math.min(unfulfilledCount, stockOnHand) : unfulfilledCount;
     }
 
-    getUnfulfilledCount(line: OrderDetail.Lines): number {
+    getUnfulfilledCount(line: OrderDetailFragment['lines'][number]): number {
         const fulfilled =
-            line.fulfillments
-                ?.map(f => f.summary)
+            this.order.fulfillments
+                ?.filter(f => f.state !== 'Cancelled')
+                .map(f => f.lines)
                 .flat()
-                .filter(row => row.orderLine.id === line.id)
+                .filter(row => row.orderLineId === line.id)
                 .reduce((sum, row) => sum + row.quantity, 0) ?? 0;
         return line.quantity - fulfilled;
     }
@@ -82,12 +86,15 @@ export class FulfillOrderDialogComponent implements Dialog<FulfillOrderInput>, O
             (total, { fulfillCount }) => total + fulfillCount,
             0,
         );
+        const fulfillmentQuantityIsValid = Object.values(this.fulfillmentQuantities).every(
+            ({ fulfillCount, max }) => fulfillCount <= max,
+        );
         const formIsValid =
             configurableOperationValueIsValid(
                 this.fulfillmentHandlerDef,
                 this.fulfillmentHandlerControl.value,
             ) && this.fulfillmentHandlerControl.valid;
-        return formIsValid && 0 < totalCount;
+        return formIsValid && 0 < totalCount && fulfillmentQuantityIsValid;
     }
 
     select() {

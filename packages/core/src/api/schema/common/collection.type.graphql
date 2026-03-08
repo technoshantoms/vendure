@@ -11,10 +11,12 @@ type Collection implements Node {
     featuredAsset: Asset
     assets: [Asset!]!
     parent: Collection
+    parentId: ID!
     children: [Collection!]
     filters: [ConfigurableOperation!]!
     translations: [CollectionTranslation!]!
     productVariants(options: ProductVariantListOptions): ProductVariantList!
+    productVariantCount: Int!
 }
 
 type CollectionBreadcrumb {

@@ -1,27 +1,62 @@
 import { Injectable } from '@nestjs/common';
-import { InjectConnection } from '@nestjs/typeorm';
+import { InjectDataSource } from '@nestjs/typeorm/dist/common/typeorm.decorators';
 import { ID, Type } from '@vendure/common/lib/shared-types';
 import {
-    Connection,
+    DataSource,
     EntityManager,
     EntitySchema,
+    FindManyOptions,
     FindOneOptions,
-    FindOptionsUtils,
+    ObjectLiteral,
     ObjectType,
+    ReplicationMode,
     Repository,
     SelectQueryBuilder,
 } from 'typeorm';
 
 import { RequestContext } from '../api/common/request-context';
+import { TransactionIsolationLevel } from '../api/decorators/transaction.decorator';
 import { TRANSACTION_MANAGER_KEY } from '../common/constants';
 import { EntityNotFoundError } from '../common/error/errors';
 import { ChannelAware, SoftDeletable } from '../common/types/common-types';
-import { Logger } from '../config/index';
+import { EntityAccessControlStrategy } from '../config/auth/entity-access-control-strategy';
+import { ConfigService } from '../config/config.service';
 import { VendureEntity } from '../entity/base/base.entity';
+import { joinTreeRelationsDynamically } from '../service/helpers/utils/tree-relations-qb-joiner';
 
-import { removeCustomFieldsWithEagerRelations } from './remove-custom-fields-with-eager-relations';
+import { findOptionsObjectToArray } from './find-options-object-to-array';
 import { TransactionWrapper } from './transaction-wrapper';
 import { GetEntityOrThrowOptions } from './types';
+
+/**
+ * Repository methods intercepted by the access control Proxy.
+ * Hoisted to module level to avoid re-creating the Set on every getRepository() call.
+ */
+const ACCESS_CONTROL_INTERCEPTED_METHODS = new Set([
+    'find',
+    'findOne',
+    'findOneOrFail',
+    'findAndCount',
+    'count',
+]);
+
+/**
+ * SelectQueryBuilder terminal methods that execute SQL. When a QueryBuilder
+ * is obtained via a Proxy-wrapped repository's `createQueryBuilder()`, these
+ * methods are intercepted to apply access control before execution.
+ */
+const QB_TERMINAL_METHODS = new Set([
+    'getMany',
+    'getOne',
+    'getOneOrFail',
+    'getManyAndCount',
+    'getCount',
+    'getExists',
+    'getRawMany',
+    'getRawOne',
+    'getRawAndEntities',
+    'stream',
+]);
 
 /**
  * @description
@@ -38,8 +73,9 @@ import { GetEntityOrThrowOptions } from './types';
 @Injectable()
 export class TransactionalConnection {
     constructor(
-        @InjectConnection() private connection: Connection,
+        @InjectDataSource() private dataSource: DataSource,
         private transactionWrapper: TransactionWrapper,
+        private configService: ConfigService,
     ) {}
 
     /**
@@ -48,44 +84,89 @@ export class TransactionalConnection {
      * performed with this connection will not be performed within any outer
      * transactions.
      */
-    get rawConnection(): Connection {
-        return this.connection;
+    get rawConnection(): DataSource {
+        return this.dataSource;
     }
 
     /**
      * @description
      * Returns a TypeORM repository. Note that when no RequestContext is supplied, the repository will not
-     * be aware of any existing transaction. Therefore calling this method without supplying a RequestContext
+     * be aware of any existing transaction. Therefore, calling this method without supplying a RequestContext
      * is discouraged without a deliberate reason.
      *
      * @deprecated since 1.7.0: Use {@link TransactionalConnection.rawConnection rawConnection.getRepository()} function instead.
      */
-    getRepository<Entity>(target: ObjectType<Entity> | EntitySchema<Entity> | string): Repository<Entity>;
+    getRepository<Entity extends ObjectLiteral>(
+        target: ObjectType<Entity> | EntitySchema<Entity> | string,
+    ): Repository<Entity>;
     /**
      * @description
      * Returns a TypeORM repository which is bound to any existing transactions. It is recommended to _always_ pass
      * the RequestContext argument when possible, otherwise the queries will be executed outside of any
      * ongoing transactions which have been started by the {@link Transaction} decorator.
+     *
+     * The `options` parameter allows specifying additional configurations, such as the `replicationMode`,
+     * which determines whether the repository should interact with the master or replica database.
+     *
+     * @param ctx - The RequestContext, which ensures the repository is aware of any existing transactions.
+     * @param target - The entity type or schema for which the repository is returned.
+     * @param options - Additional options for configuring the repository, such as the `replicationMode`.
+     *
+     * @returns A TypeORM repository for the specified entity type.
      */
-    getRepository<Entity>(
+    getRepository<Entity extends ObjectLiteral>(
         ctx: RequestContext | undefined,
         target: ObjectType<Entity> | EntitySchema<Entity> | string,
+        options?: {
+            replicationMode?: ReplicationMode;
+        },
     ): Repository<Entity>;
-    getRepository<Entity>(
+    /**
+     * @description
+     * Returns a TypeORM repository. Depending on the parameters passed, it will either be transaction-aware
+     * or not. If `RequestContext` is provided, the repository is bound to any ongoing transactions. The
+     * `options` parameter allows further customization, such as selecting the replication mode (e.g., 'master').
+     *
+     * @param ctxOrTarget - Either the RequestContext, which binds the repository to ongoing transactions, or the entity type/schema.
+     * @param maybeTarget - The entity type or schema for which the repository is returned (if `ctxOrTarget` is a RequestContext).
+     * @param options - Additional options for configuring the repository, such as the `replicationMode`.
+     *
+     * @returns A TypeORM repository for the specified entity type.
+     */
+    getRepository<Entity extends ObjectLiteral>(
         ctxOrTarget: RequestContext | ObjectType<Entity> | EntitySchema<Entity> | string | undefined,
         maybeTarget?: ObjectType<Entity> | EntitySchema<Entity> | string,
+        options?: {
+            replicationMode?: ReplicationMode;
+        },
     ): Repository<Entity> {
         if (ctxOrTarget instanceof RequestContext) {
             const transactionManager = this.getTransactionManager(ctxOrTarget);
+            let repo: Repository<Entity>;
             if (transactionManager) {
-                // tslint:disable-next-line:no-non-null-assertion
-                return transactionManager.getRepository(maybeTarget!);
+                // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+                repo = transactionManager.getRepository(maybeTarget!);
+            } else if (ctxOrTarget.replicationMode === 'master' || options?.replicationMode === 'master') {
+                // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+                repo = this.dataSource.createQueryRunner('master').manager.getRepository(maybeTarget!);
             } else {
-                // tslint:disable-next-line:no-non-null-assertion
-                return this.rawConnection.getRepository(maybeTarget!);
+                // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+                repo = this.rawConnection.getRepository(maybeTarget!);
             }
+            const strategy = this.configService.authOptions.entityAccessControlStrategy;
+            if (strategy?.applyAccessControl && maybeTarget && typeof maybeTarget === 'function') {
+                return this.wrapWithAccessControl(repo, maybeTarget, ctxOrTarget, strategy);
+            }
+            return repo;
         } else {
-            // tslint:disable-next-line:no-non-null-assertion
+            if (options?.replicationMode === 'master') {
+                /* eslint-disable @typescript-eslint/no-non-null-assertion */
+                return this.dataSource
+                    .createQueryRunner(options.replicationMode)
+                    .manager.getRepository(maybeTarget!);
+                /* eslint-enable @typescript-eslint/no-non-null-assertion */
+            }
+            // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
             return this.rawConnection.getRepository(ctxOrTarget ?? maybeTarget!);
         }
     }
@@ -111,7 +192,7 @@ export class TransactionalConnection {
      * all inner method calls.
      *
      * @example
-     * ```TypeScript
+     * ```ts
      * private async transferCredit(outerCtx: RequestContext, fromId: ID, toId: ID, amount: number) {
      *   await this.connection.withTransaction(outerCtx, async ctx => {
      *     // Note you must not use `outerCtx` here, instead use `ctx`. Otherwise, this query
@@ -141,13 +222,13 @@ export class TransactionalConnection {
         let work: (ctx: RequestContext) => Promise<T>;
         if (ctxOrWork instanceof RequestContext) {
             ctx = ctxOrWork;
-            // tslint:disable-next-line:no-non-null-assertion
+            // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
             work = maybeWork!;
         } else {
             ctx = RequestContext.empty();
             work = ctxOrWork;
         }
-        return this.transactionWrapper.executeInTransaction(ctx, work, 'auto', this.rawConnection);
+        return this.transactionWrapper.executeInTransaction(ctx, work, 'auto', undefined, this.rawConnection);
     }
 
     /**
@@ -155,10 +236,10 @@ export class TransactionalConnection {
      * Manually start a transaction if one is not already in progress. This method should be used in
      * conjunction with the `'manual'` mode of the {@link Transaction} decorator.
      */
-    async startTransaction(ctx: RequestContext) {
+    async startTransaction(ctx: RequestContext, isolationLevel?: TransactionIsolationLevel) {
         const transactionManager = this.getTransactionManager(ctx);
         if (transactionManager?.queryRunner?.isTransactionActive === false) {
-            await transactionManager.queryRunner.startTransaction();
+            await transactionManager.queryRunner.startTransaction(isolationLevel);
         }
     }
 
@@ -211,7 +292,7 @@ export class TransactionalConnection {
                 try {
                     const result = await this.getEntityOrThrowInternal(ctx, entityType, id, options);
                     return result;
-                } catch (e) {
+                } catch (e: any) {
                     err = e;
                     if (attempt < retriesInt - 1) {
                         await new Promise(resolve => setTimeout(resolve, delay));
@@ -239,7 +320,16 @@ export class TransactionalConnection {
                 optionsWithoutChannelId,
             );
         } else {
-            entity = await this.getRepository(ctx, entityType).findOne(id, options as FindOneOptions);
+            const optionsWithId = {
+                ...options,
+                where: {
+                    ...(options.where || {}),
+                    id,
+                },
+            } as FindOneOptions<T>;
+            entity = await this.getRepository(ctx, entityType)
+                .findOne(optionsWithId)
+                .then(result => result ?? undefined);
         }
         if (
             !entity ||
@@ -262,41 +352,30 @@ export class TransactionalConnection {
         entity: Type<T>,
         id: ID,
         channelId: ID,
-        options: FindOneOptions = {},
+        options: FindOneOptions<T> = {},
     ) {
-        let qb = this.getRepository(ctx, entity).createQueryBuilder('entity');
-        options.relations = removeCustomFieldsWithEagerRelations(qb, options.relations);
-        let skipEagerRelations = false;
-        try {
-            FindOptionsUtils.applyFindManyOptionsOrConditionsToQueryBuilder(qb, options);
-        } catch (e: any) {
-            // https://github.com/vendure-ecommerce/vendure/issues/1664
-            // This is a failsafe to catch edge cases related to the TypeORM
-            // bug described in the doc block of `removeCustomFieldsWithEagerRelations`.
-            // In this case, a nested custom field relation has an eager-loaded relation,
-            // and is throwing an error. In this case we throw our hands up and say
-            // "sod it!", refuse to load _any_ relations at all, and rely on the
-            // GraphQL entity resolvers to take care of them.
-            Logger.debug(
-                `TransactionalConnection.findOneInChannel ran into issues joining nested custom field relations. Running the query without joining any relations instead.`,
+        const qb = this.getRepository(ctx, entity).createQueryBuilder('entity');
+
+        if (options.relations) {
+            const joinedRelations = joinTreeRelationsDynamically(qb, entity, options.relations);
+            // Remove any relations which are related to the 'collection' tree, as these are handled separately
+            // to avoid duplicate joins.
+            options.relations = findOptionsObjectToArray(options.relations).filter(
+                relationPath => !joinedRelations.has(relationPath),
             );
-            qb = this.getRepository(ctx, entity).createQueryBuilder('entity');
-            FindOptionsUtils.applyFindManyOptionsOrConditionsToQueryBuilder(qb, {
-                ...options,
-                relations: [],
-                loadEagerRelations: false,
-            });
-            skipEagerRelations = true;
         }
-        if (options.loadEagerRelations !== false && !skipEagerRelations) {
-            // tslint:disable-next-line:no-non-null-assertion
-            FindOptionsUtils.joinEagerRelations(qb, qb.alias, qb.expressionMap.mainAlias!.metadata);
-        }
-        return qb
-            .leftJoin('entity.channels', 'channel')
+        qb.setFindOptions({
+            relationLoadStrategy: 'query', // default to query strategy for maximum performance
+            ...options,
+        });
+
+        qb.leftJoin('entity.channels', '__channel')
             .andWhere('entity.id = :id', { id })
-            .andWhere('channel.id = :channelId', { channelId })
-            .getOne();
+            .andWhere('__channel.id = :channelId', { channelId });
+
+        return qb.getOne().then(result => {
+            return result ?? undefined;
+        });
     }
 
     /**
@@ -309,7 +388,7 @@ export class TransactionalConnection {
         entity: Type<T>,
         ids: ID[],
         channelId: ID,
-        options: FindOneOptions,
+        options: FindManyOptions<T>,
     ) {
         // the syntax described in https://github.com/typeorm/typeorm/issues/1239#issuecomment-366955628
         // breaks if the array is empty
@@ -318,19 +397,108 @@ export class TransactionalConnection {
         }
 
         const qb = this.getRepository(ctx, entity).createQueryBuilder('entity');
-        FindOptionsUtils.applyFindManyOptionsOrConditionsToQueryBuilder(qb, options);
-        if (options.loadEagerRelations !== false) {
-            // tslint:disable-next-line:no-non-null-assertion
-            FindOptionsUtils.joinEagerRelations(qb, qb.alias, qb.expressionMap.mainAlias!.metadata);
+
+        if (Array.isArray(options.relations) && options.relations.length > 0) {
+            const joinedRelations = joinTreeRelationsDynamically(
+                qb as SelectQueryBuilder<VendureEntity>,
+                entity,
+                options.relations,
+            );
+            // Remove any relations which are related to the 'collection' tree, as these are handled separately
+            // to avoid duplicate joins.
+            options.relations = options.relations.filter(relationPath => !joinedRelations.has(relationPath));
         }
-        return qb
-            .leftJoin('entity.channels', 'channel')
+
+        qb.setFindOptions({
+            relationLoadStrategy: 'query', // default to query strategy for maximum performance
+            ...options,
+        });
+
+        qb.leftJoin('entity.channels', 'channel')
             .andWhere('entity.id IN (:...ids)', { ids })
-            .andWhere('channel.id = :channelId', { channelId })
-            .getMany();
+            .andWhere('channel.id = :channelId', { channelId });
+
+        return qb.getMany();
+    }
+
+    private wrapWithAccessControl<Entity extends ObjectLiteral>(
+        repo: Repository<Entity>,
+        target: ObjectType<Entity>,
+        ctx: RequestContext,
+        strategy: EntityAccessControlStrategy,
+    ): Repository<Entity> {
+        return new Proxy(repo, {
+            get(obj, prop, receiver) {
+                if (prop === 'createQueryBuilder') {
+                    return (...args: any[]) => {
+                        const qb = obj.createQueryBuilder(...args);
+                        return wrapQueryBuilder(qb, target, ctx, strategy);
+                    };
+                }
+                if (typeof prop === 'string' && ACCESS_CONTROL_INTERCEPTED_METHODS.has(prop)) {
+                    return (options: FindOneOptions<Entity> | FindManyOptions<Entity> = {}) => {
+                        const alias = obj.metadata.name;
+                        const qb = obj.createQueryBuilder(alias);
+                        qb.setFindOptions(options as FindManyOptions<Entity>);
+                        strategy.applyAccessControl?.(qb as SelectQueryBuilder<any>, target as any, ctx);
+                        switch (prop) {
+                            case 'find':
+                                return qb.getMany();
+                            case 'findOne': {
+                                if (!(options as FindOneOptions<Entity>).where) {
+                                    return Promise.resolve(null);
+                                }
+                                return qb.getOne();
+                            }
+                            case 'findOneOrFail': {
+                                return qb.getOneOrFail();
+                            }
+                            case 'findAndCount':
+                                return qb.getManyAndCount();
+                            case 'count':
+                                return qb.getCount();
+                            default:
+                                return qb.getMany();
+                        }
+                    };
+                }
+                return Reflect.get(obj, prop, receiver);
+            },
+        });
     }
 
     private getTransactionManager(ctx: RequestContext): EntityManager | undefined {
         return (ctx as any)[TRANSACTION_MANAGER_KEY];
     }
+}
+
+/**
+ * Wraps a SelectQueryBuilder so that `applyAccessControl` is called
+ * before any terminal method (getMany, getOne, etc.) executes.
+ *
+ * Uses an `applied` flag to ensure ACL is applied exactly once,
+ * even if terminal methods call each other internally (e.g.
+ * getOneOrFail → getOne → getRawAndEntities).
+ */
+function wrapQueryBuilder<Entity extends ObjectLiteral>(
+    qb: SelectQueryBuilder<Entity>,
+    entityType: ObjectType<Entity>,
+    ctx: RequestContext,
+    strategy: EntityAccessControlStrategy,
+): SelectQueryBuilder<Entity> {
+    let applied = false;
+    return new Proxy(qb, {
+        get(obj, prop, receiver) {
+            if (typeof prop === 'string' && QB_TERMINAL_METHODS.has(prop)) {
+                return (...args: any[]) => {
+                    if (!applied) {
+                        strategy.applyAccessControl?.(obj as SelectQueryBuilder<any>, entityType as any, ctx);
+                        applied = true;
+                    }
+                    return (obj as any)[prop](...args);
+                };
+            }
+            return Reflect.get(obj, prop, receiver);
+        },
+    });
 }

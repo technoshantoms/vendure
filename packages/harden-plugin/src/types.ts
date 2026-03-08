@@ -1,10 +1,11 @@
-import { ComplexityEstimator } from 'graphql-query-complexity/dist/cjs/QueryComplexity';
+import { GraphQLRequestContext } from '@apollo/server';
+import { ComplexityEstimator } from 'graphql-query-complexity';
 
 /**
  * @description
  * Options that can be passed to the `.init()` static method of the HardenPlugin.
  *
- * @docsCategory HardenPlugin
+ * @docsCategory core plugins/HardenPlugin
  */
 export interface HardenPluginOptions {
     /**
@@ -44,7 +45,7 @@ export interface HardenPluginOptions {
      * its complexity like this:
      *
      * @example
-     * ```TypeScript
+     * ```ts
      * HardenPlugin.init({
      *   maxQueryComplexity: 650,
      *   customComplexityFactors: {
@@ -79,4 +80,16 @@ export interface HardenPluginOptions {
      * @default 'prod'
      */
     apiMode?: 'dev' | 'prod';
+    /**
+     * @description
+     * Allows you to skip the complexity check for certain requests.
+     *
+     * @example
+     * ```ts
+     * HardenPlugin.init({
+     *   skip: (context) => context.request.http.headers['x-storefront-ssr-auth'] === 'some-secret-token'
+     * }),
+     * ```
+     */
+    skip?: (context: GraphQLRequestContext<any>) => Promise<boolean> | boolean;
 }

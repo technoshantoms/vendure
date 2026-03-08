@@ -24,6 +24,16 @@ export interface DefaultSearchPluginInitOptions {
     indexStockStatus?: boolean;
     /**
      * @description
+     * If set to `true`, the currencyCode of the ProductVariant will be exposed in the
+     * `search` query results. Enabling this option on an existing Vendure installation
+     * will require a DB migration/synchronization.
+     *
+     * @since 3.6.0
+     * @default false.
+     */
+    indexCurrencyCode?: boolean;
+    /**
+     * @description
      * If set to `true`, updates to Products, ProductVariants and Collections will not immediately
      * trigger an update to the search index. Instead, all these changes will be buffered and will
      * only be run via a call to the `runPendingSearchIndexUpdates` mutation in the Admin API.
@@ -44,7 +54,7 @@ export interface DefaultSearchPluginInitOptions {
      * such as {@link MysqlSearchStrategy}, {@link PostgresSearchStrategy} or {@link SqliteSearchStrategy}.
      *
      * @example
-     * ```Typescript
+     * ```ts
      * export class MySearchStrategy implements SearchStrategy {
      *     private readonly minTermLength = 2;
      *     private connection: TransactionalConnection;
@@ -120,7 +130,7 @@ export interface DefaultSearchPluginInitOptions {
      * @since 1.6.0
      * @default undefined
      */
-    searchStategy?: SearchStrategy;
+    searchStrategy?: SearchStrategy;
 }
 
 /**

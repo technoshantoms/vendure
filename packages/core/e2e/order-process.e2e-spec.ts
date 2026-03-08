@@ -1,44 +1,35 @@
-/* tslint:disable:no-non-null-assertion */
-import { CustomOrderProcess, mergeConfig, OrderState, TransactionalConnection } from '@vendure/core';
+/* eslint-disable @typescript-eslint/no-non-null-assertion */
+import { ErrorCode } from '@vendure/common/lib/generated-types';
+import { CustomOrderProcess, defaultOrderProcess, mergeConfig, TransactionalConnection } from '@vendure/core';
 import { createErrorResultGuard, createTestEnvironment, ErrorResultGuard } from '@vendure/testing';
 import path from 'path';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { initialData } from '../../../e2e-common/e2e-initial-data';
-import { testConfig, TEST_SETUP_TIMEOUT_MS } from '../../../e2e-common/test-config';
+import { TEST_SETUP_TIMEOUT_MS, testConfig } from '../../../e2e-common/test-config';
 
 import { testSuccessfulPaymentMethod } from './fixtures/test-payment-methods';
-import { AdminTransition, GetOrder, OrderFragment } from './graphql/generated-e2e-admin-types';
+import { orderFragment } from './graphql/fragments-admin';
+import { FragmentOf } from './graphql/graphql-admin';
+import { FragmentOf as FragmentOfShop } from './graphql/graphql-shop';
+import { adminTransitionToStateDocument, getOrderDocument } from './graphql/shared-definitions';
 import {
-    AddItemToOrder,
-    AddPaymentToOrder,
-    ErrorCode,
-    GetNextOrderStates,
-    SetCustomerForOrder,
-    SetShippingAddress,
-    SetShippingMethod,
-    TestOrderFragmentFragment,
-    TransitionToState,
-    TransitionToStateMutation,
-    TransitionToStateMutationVariables,
-} from './graphql/generated-e2e-shop-types';
-import { ADMIN_TRANSITION_TO_STATE, GET_ORDER } from './graphql/shared-definitions';
-import {
-    ADD_ITEM_TO_ORDER,
-    ADD_PAYMENT,
-    GET_NEXT_STATES,
-    SET_CUSTOMER,
-    SET_SHIPPING_ADDRESS,
-    SET_SHIPPING_METHOD,
-    TRANSITION_TO_STATE,
+    addItemToOrderDocument,
+    addPaymentDocument,
+    getNextStatesDocument,
+    setCustomerDocument,
+    setShippingAddressDocument,
+    setShippingMethodDocument,
+    testOrderFragment,
+    transitionToStateDocument,
+    updatedOrderFragment,
 } from './graphql/shop-definitions';
 
-type TestOrderState = OrderState | 'ValidatingCustomer';
-
-const initSpy = jest.fn();
-const transitionStartSpy = jest.fn();
-const transitionEndSpy = jest.fn();
-const transitionEndSpy2 = jest.fn();
-const transitionErrorSpy = jest.fn();
+const initSpy = vi.fn();
+const transitionStartSpy = vi.fn();
+const transitionEndSpy = vi.fn();
+const transitionEndSpy2 = vi.fn();
+const transitionErrorSpy = vi.fn();
 
 describe('Order process', () => {
     const VALIDATION_ERROR_MESSAGE = 'Customer must have a company email address';
@@ -91,12 +82,26 @@ describe('Order process', () => {
         },
     };
 
-    const orderErrorGuard: ErrorResultGuard<TestOrderFragmentFragment | OrderFragment> =
-        createErrorResultGuard(input => !!input.total);
+    // Create guards for different fragment types
+    type TestOrderFragmentType = FragmentOfShop<typeof testOrderFragment>;
+    type UpdatedOrderFragmentType = FragmentOfShop<typeof updatedOrderFragment>;
+    type AdminOrderFragmentType = FragmentOf<typeof orderFragment>;
+
+    const testOrderGuard: ErrorResultGuard<TestOrderFragmentType> = createErrorResultGuard(
+        input => !!input.lines,
+    );
+
+    const updatedOrderGuard: ErrorResultGuard<UpdatedOrderFragmentType> = createErrorResultGuard(
+        input => !!input.lines,
+    );
+
+    const adminOrderGuard: ErrorResultGuard<AdminOrderFragmentType> = createErrorResultGuard(
+        input => !!input.id,
+    );
 
     const { server, adminClient, shopClient } = createTestEnvironment(
         mergeConfig(testConfig(), {
-            orderOptions: { process: [customOrderProcess as any, customOrderProcess2 as any] },
+            orderOptions: { process: [defaultOrderProcess, customOrderProcess, customOrderProcess2] as any },
             paymentOptions: {
                 paymentMethodHandlers: [testSuccessfulPaymentMethod],
             },
@@ -130,7 +135,7 @@ describe('Order process', () => {
             transitionEndSpy.mockClear();
             await shopClient.asAnonymousUser();
 
-            await shopClient.query<AddItemToOrder.Mutation, AddItemToOrder.Variables>(ADD_ITEM_TO_ORDER, {
+            await shopClient.query(addItemToOrderDocument, {
                 productVariantId: 'T_1',
                 quantity: 1,
             });
@@ -149,12 +154,12 @@ describe('Order process', () => {
         });
 
         it('replaced transition target', async () => {
-            await shopClient.query<AddItemToOrder.Mutation, AddItemToOrder.Variables>(ADD_ITEM_TO_ORDER, {
+            await shopClient.query(addItemToOrderDocument, {
                 productVariantId: 'T_1',
                 quantity: 1,
             });
 
-            const { nextOrderStates } = await shopClient.query<GetNextOrderStates.Query>(GET_NEXT_STATES);
+            const { nextOrderStates } = await shopClient.query(getNextStatesDocument);
 
             expect(nextOrderStates).toEqual(['ValidatingCustomer']);
         });
@@ -163,13 +168,10 @@ describe('Order process', () => {
             transitionStartSpy.mockClear();
             transitionEndSpy.mockClear();
 
-            const { transitionOrderToState } = await shopClient.query<
-                TransitionToState.Mutation,
-                TransitionToState.Variables
-            >(TRANSITION_TO_STATE, {
+            const { transitionOrderToState } = await shopClient.query(transitionToStateDocument, {
                 state: 'ValidatingCustomer',
             });
-            orderErrorGuard.assertSuccess(transitionOrderToState);
+            testOrderGuard.assertSuccess(transitionOrderToState!);
 
             expect(transitionStartSpy).toHaveBeenCalledTimes(1);
             expect(transitionEndSpy).not.toHaveBeenCalled();
@@ -177,39 +179,33 @@ describe('Order process', () => {
                 'AddingItems',
                 'ValidatingCustomer',
             ]);
-            expect(transitionOrderToState?.state).toBe('AddingItems');
+            expect(transitionOrderToState.state).toBe('AddingItems');
         });
 
         it('custom onTransitionStart handler returning error message', async () => {
             transitionStartSpy.mockClear();
             transitionErrorSpy.mockClear();
 
-            await shopClient.query<SetCustomerForOrder.Mutation, SetCustomerForOrder.Variables>(
-                SET_CUSTOMER,
-                {
-                    input: {
-                        firstName: 'Joe',
-                        lastName: 'Test',
-                        emailAddress: 'joetest@gmail.com',
-                    },
+            await shopClient.query(setCustomerDocument, {
+                input: {
+                    firstName: 'Joe',
+                    lastName: 'Test',
+                    emailAddress: 'joetest@gmail.com',
                 },
-            );
+            });
 
-            const { transitionOrderToState } = await shopClient.query<
-                TransitionToState.Mutation,
-                TransitionToState.Variables
-            >(TRANSITION_TO_STATE, {
+            const { transitionOrderToState } = await shopClient.query(transitionToStateDocument, {
                 state: 'ValidatingCustomer',
             });
-            orderErrorGuard.assertErrorResult(transitionOrderToState);
+            testOrderGuard.assertErrorResult(transitionOrderToState!);
 
-            expect(transitionOrderToState!.message).toBe(
+            expect(transitionOrderToState.message).toBe(
                 'Cannot transition Order from "AddingItems" to "ValidatingCustomer"',
             );
-            expect(transitionOrderToState!.errorCode).toBe(ErrorCode.ORDER_STATE_TRANSITION_ERROR);
-            expect(transitionOrderToState!.transitionError).toBe(VALIDATION_ERROR_MESSAGE);
-            expect(transitionOrderToState!.fromState).toBe('AddingItems');
-            expect(transitionOrderToState!.toState).toBe('ValidatingCustomer');
+            expect(transitionOrderToState.errorCode).toBe(ErrorCode.ORDER_STATE_TRANSITION_ERROR);
+            expect(transitionOrderToState.transitionError).toBe(VALIDATION_ERROR_MESSAGE);
+            expect(transitionOrderToState.fromState).toBe('AddingItems');
+            expect(transitionOrderToState.toState).toBe('ValidatingCustomer');
 
             expect(transitionStartSpy).toHaveBeenCalledTimes(1);
             expect(transitionErrorSpy).toHaveBeenCalledTimes(1);
@@ -224,44 +220,35 @@ describe('Order process', () => {
         it('custom onTransitionStart handler allows transition', async () => {
             transitionEndSpy.mockClear();
 
-            await shopClient.query<SetCustomerForOrder.Mutation, SetCustomerForOrder.Variables>(
-                SET_CUSTOMER,
-                {
-                    input: {
-                        firstName: 'Joe',
-                        lastName: 'Test',
-                        emailAddress: 'joetest@company.com',
-                    },
+            await shopClient.query(setCustomerDocument, {
+                input: {
+                    firstName: 'Joe',
+                    lastName: 'Test',
+                    emailAddress: 'joetest@company.com',
                 },
-            );
+            });
 
-            const { transitionOrderToState } = await shopClient.query<
-                TransitionToState.Mutation,
-                TransitionToState.Variables
-            >(TRANSITION_TO_STATE, {
+            const { transitionOrderToState } = await shopClient.query(transitionToStateDocument, {
                 state: 'ValidatingCustomer',
             });
-            orderErrorGuard.assertSuccess(transitionOrderToState);
+            testOrderGuard.assertSuccess(transitionOrderToState!);
 
             expect(transitionEndSpy).toHaveBeenCalledTimes(1);
             expect(transitionEndSpy.mock.calls[0].slice(0, 2)).toEqual(['AddingItems', 'ValidatingCustomer']);
-            expect(transitionOrderToState?.state).toBe('ValidatingCustomer');
+            expect(transitionOrderToState.state).toBe('ValidatingCustomer');
         });
 
         it('composes multiple CustomOrderProcesses', async () => {
             transitionEndSpy.mockClear();
             transitionEndSpy2.mockClear();
 
-            const { nextOrderStates } = await shopClient.query<GetNextOrderStates.Query>(GET_NEXT_STATES);
+            const { nextOrderStates } = await shopClient.query(getNextStatesDocument);
 
             expect(nextOrderStates).toEqual(['ArrangingPayment', 'AddingItems', 'Cancelled']);
 
-            await shopClient.query<TransitionToState.Mutation, TransitionToState.Variables>(
-                TRANSITION_TO_STATE,
-                {
-                    state: 'AddingItems',
-                },
-            );
+            await shopClient.query(transitionToStateDocument, {
+                state: 'AddingItems',
+            });
 
             expect(transitionEndSpy.mock.calls[0].slice(0, 2)).toEqual(['ValidatingCustomer', 'AddingItems']);
             expect(transitionEndSpy2.mock.calls[0].slice(0, 2)).toEqual([
@@ -270,226 +257,178 @@ describe('Order process', () => {
             ]);
         });
 
-        // https://github.com/vendure-ecommerce/vendure/issues/963
+        // https://github.com/vendurehq/vendure/issues/963
         it('allows addPaymentToOrder from a custom state', async () => {
-            await shopClient.query<SetShippingMethod.Mutation, SetShippingMethod.Variables>(
-                SET_SHIPPING_METHOD,
-                { id: 'T_1' },
-            );
-            const result0 = await shopClient.query<
-                TransitionToStateMutation,
-                TransitionToStateMutationVariables
-            >(TRANSITION_TO_STATE, {
+            await shopClient.query(setShippingMethodDocument, { id: ['T_1'] });
+            const result0 = await shopClient.query(transitionToStateDocument, {
                 state: 'ValidatingCustomer',
             });
-            orderErrorGuard.assertSuccess(result0.transitionOrderToState);
-            const result1 = await shopClient.query<
-                TransitionToStateMutation,
-                TransitionToStateMutationVariables
-            >(TRANSITION_TO_STATE, {
+            testOrderGuard.assertSuccess(result0.transitionOrderToState!);
+            const result1 = await shopClient.query(transitionToStateDocument, {
                 state: 'ArrangingPayment',
             });
-            orderErrorGuard.assertSuccess(result1.transitionOrderToState);
-            const result2 = await shopClient.query<
-                TransitionToStateMutation,
-                TransitionToStateMutationVariables
-            >(TRANSITION_TO_STATE, {
+            testOrderGuard.assertSuccess(result1.transitionOrderToState!);
+            const result2 = await shopClient.query(transitionToStateDocument, {
                 state: 'PaymentProcessing',
             });
-            orderErrorGuard.assertSuccess(result2.transitionOrderToState);
+            testOrderGuard.assertSuccess(result2.transitionOrderToState!);
             expect(result2.transitionOrderToState.state).toBe('PaymentProcessing');
-            const { addPaymentToOrder } = await shopClient.query<
-                AddPaymentToOrder.Mutation,
-                AddPaymentToOrder.Variables
-            >(ADD_PAYMENT, {
+            const { addPaymentToOrder } = await shopClient.query(addPaymentDocument, {
                 input: {
                     method: testSuccessfulPaymentMethod.code,
                     metadata: {},
                 },
             });
-            orderErrorGuard.assertSuccess(addPaymentToOrder);
+            updatedOrderGuard.assertSuccess(addPaymentToOrder);
             expect(addPaymentToOrder.state).toBe('PaymentSettled');
         });
     });
 
     describe('Admin API transition constraints', () => {
-        let order: NonNullable<TestOrderFragmentFragment>;
+        let order: FragmentOfShop<typeof testOrderFragment>;
 
         beforeAll(async () => {
             await shopClient.asAnonymousUser();
-            await shopClient.query<AddItemToOrder.Mutation, AddItemToOrder.Variables>(ADD_ITEM_TO_ORDER, {
+            await shopClient.query(addItemToOrderDocument, {
                 productVariantId: 'T_1',
                 quantity: 1,
             });
-            await shopClient.query<SetCustomerForOrder.Mutation, SetCustomerForOrder.Variables>(
-                SET_CUSTOMER,
-                {
-                    input: {
-                        firstName: 'Su',
-                        lastName: 'Test',
-                        emailAddress: 'sutest@company.com',
-                    },
+            await shopClient.query(setCustomerDocument, {
+                input: {
+                    firstName: 'Su',
+                    lastName: 'Test',
+                    emailAddress: 'sutest@company.com',
                 },
-            );
-            await shopClient.query<SetShippingAddress.Mutation, SetShippingAddress.Variables>(
-                SET_SHIPPING_ADDRESS,
-                {
-                    input: {
-                        fullName: 'name',
-                        streetLine1: '12 the street',
-                        city: 'foo',
-                        postalCode: '123456',
-                        countryCode: 'US',
-                        phoneNumber: '4444444',
-                    },
+            });
+            await shopClient.query(setShippingAddressDocument, {
+                input: {
+                    fullName: 'name',
+                    streetLine1: '12 the street',
+                    city: 'foo',
+                    postalCode: '123456',
+                    countryCode: 'US',
+                    phoneNumber: '4444444',
                 },
-            );
-            await shopClient.query<SetShippingMethod.Mutation, SetShippingMethod.Variables>(
-                SET_SHIPPING_METHOD,
-                { id: 'T_1' },
-            );
-            await shopClient.query<TransitionToState.Mutation, TransitionToState.Variables>(
-                TRANSITION_TO_STATE,
-                {
-                    state: 'ValidatingCustomer',
-                },
-            );
-            const { transitionOrderToState } = await shopClient.query<
-                TransitionToState.Mutation,
-                TransitionToState.Variables
-            >(TRANSITION_TO_STATE, {
+            });
+            await shopClient.query(setShippingMethodDocument, { id: ['T_1'] });
+            await shopClient.query(transitionToStateDocument, {
+                state: 'ValidatingCustomer',
+            });
+            const { transitionOrderToState } = await shopClient.query(transitionToStateDocument, {
                 state: 'ArrangingPayment',
             });
-            orderErrorGuard.assertSuccess(transitionOrderToState);
+            testOrderGuard.assertSuccess(transitionOrderToState!);
 
-            order = transitionOrderToState!;
+            order = transitionOrderToState as TestOrderFragmentType;
         });
 
         it('cannot manually transition to PaymentAuthorized', async () => {
             expect(order.state).toBe('ArrangingPayment');
 
-            const { transitionOrderToState } = await adminClient.query<
-                AdminTransition.Mutation,
-                AdminTransition.Variables
-            >(ADMIN_TRANSITION_TO_STATE, {
+            const { transitionOrderToState } = await adminClient.query(adminTransitionToStateDocument, {
                 id: order.id,
                 state: 'PaymentAuthorized',
             });
-            orderErrorGuard.assertErrorResult(transitionOrderToState);
+            adminOrderGuard.assertErrorResult(transitionOrderToState!);
 
-            expect(transitionOrderToState!.message).toBe(
+            expect(transitionOrderToState.message).toBe(
                 'Cannot transition Order from "ArrangingPayment" to "PaymentAuthorized"',
             );
-            expect(transitionOrderToState!.transitionError).toBe(
+            expect(transitionOrderToState.transitionError).toBe(
                 'Cannot transition Order to the "PaymentAuthorized" state when the total is not covered by authorized Payments',
             );
 
-            const result = await adminClient.query<GetOrder.Query, GetOrder.Variables>(GET_ORDER, {
+            const result = await adminClient.query(getOrderDocument, {
                 id: order.id,
             });
             expect(result.order?.state).toBe('ArrangingPayment');
         });
 
         it('cannot manually transition to PaymentSettled', async () => {
-            const { transitionOrderToState } = await adminClient.query<
-                AdminTransition.Mutation,
-                AdminTransition.Variables
-            >(ADMIN_TRANSITION_TO_STATE, {
+            const { transitionOrderToState } = await adminClient.query(adminTransitionToStateDocument, {
                 id: order.id,
                 state: 'PaymentSettled',
             });
-            orderErrorGuard.assertErrorResult(transitionOrderToState);
+            adminOrderGuard.assertErrorResult(transitionOrderToState!);
 
-            expect(transitionOrderToState!.message).toBe(
+            expect(transitionOrderToState.message).toBe(
                 'Cannot transition Order from "ArrangingPayment" to "PaymentSettled"',
             );
-            expect(transitionOrderToState!.transitionError).toContain(
+            expect(transitionOrderToState.transitionError).toContain(
                 'Cannot transition Order to the "PaymentSettled" state when the total is not covered by settled Payments',
             );
 
-            const result = await adminClient.query<GetOrder.Query, GetOrder.Variables>(GET_ORDER, {
+            const result = await adminClient.query(getOrderDocument, {
                 id: order.id,
             });
             expect(result.order?.state).toBe('ArrangingPayment');
         });
 
         it('cannot manually transition to Cancelled', async () => {
-            const { addPaymentToOrder } = await shopClient.query<
-                AddPaymentToOrder.Mutation,
-                AddPaymentToOrder.Variables
-            >(ADD_PAYMENT, {
+            const { addPaymentToOrder } = await shopClient.query(addPaymentDocument, {
                 input: {
                     method: testSuccessfulPaymentMethod.code,
                     metadata: {},
                 },
             });
-            orderErrorGuard.assertSuccess(addPaymentToOrder);
+            updatedOrderGuard.assertSuccess(addPaymentToOrder);
 
             expect(addPaymentToOrder?.state).toBe('PaymentSettled');
 
-            const { transitionOrderToState } = await adminClient.query<
-                AdminTransition.Mutation,
-                AdminTransition.Variables
-            >(ADMIN_TRANSITION_TO_STATE, {
+            const { transitionOrderToState } = await adminClient.query(adminTransitionToStateDocument, {
                 id: order.id,
                 state: 'Cancelled',
             });
-            orderErrorGuard.assertErrorResult(transitionOrderToState);
+            adminOrderGuard.assertErrorResult(transitionOrderToState!);
 
-            expect(transitionOrderToState!.message).toBe(
+            expect(transitionOrderToState.message).toBe(
                 'Cannot transition Order from "PaymentSettled" to "Cancelled"',
             );
-            expect(transitionOrderToState!.transitionError).toContain(
+            expect(transitionOrderToState.transitionError).toContain(
                 'Cannot transition Order to the "Cancelled" state unless all OrderItems are cancelled',
             );
 
-            const result = await adminClient.query<GetOrder.Query, GetOrder.Variables>(GET_ORDER, {
+            const result = await adminClient.query(getOrderDocument, {
                 id: order.id,
             });
             expect(result.order?.state).toBe('PaymentSettled');
         });
 
         it('cannot manually transition to PartiallyDelivered', async () => {
-            const { transitionOrderToState } = await adminClient.query<
-                AdminTransition.Mutation,
-                AdminTransition.Variables
-            >(ADMIN_TRANSITION_TO_STATE, {
+            const { transitionOrderToState } = await adminClient.query(adminTransitionToStateDocument, {
                 id: order.id,
                 state: 'PartiallyDelivered',
             });
-            orderErrorGuard.assertErrorResult(transitionOrderToState);
+            adminOrderGuard.assertErrorResult(transitionOrderToState!);
 
-            expect(transitionOrderToState!.message).toBe(
+            expect(transitionOrderToState.message).toBe(
                 'Cannot transition Order from "PaymentSettled" to "PartiallyDelivered"',
             );
-            expect(transitionOrderToState!.transitionError).toContain(
+            expect(transitionOrderToState.transitionError).toContain(
                 'Cannot transition Order to the "PartiallyDelivered" state unless some OrderItems are delivered',
             );
 
-            const result = await adminClient.query<GetOrder.Query, GetOrder.Variables>(GET_ORDER, {
+            const result = await adminClient.query(getOrderDocument, {
                 id: order.id,
             });
             expect(result.order?.state).toBe('PaymentSettled');
         });
 
-        it('cannot manually transition to PartiallyDelivered', async () => {
-            const { transitionOrderToState } = await adminClient.query<
-                AdminTransition.Mutation,
-                AdminTransition.Variables
-            >(ADMIN_TRANSITION_TO_STATE, {
+        it('cannot manually transition to Delivered', async () => {
+            const { transitionOrderToState } = await adminClient.query(adminTransitionToStateDocument, {
                 id: order.id,
                 state: 'Delivered',
             });
-            orderErrorGuard.assertErrorResult(transitionOrderToState);
+            adminOrderGuard.assertErrorResult(transitionOrderToState!);
 
-            expect(transitionOrderToState!.message).toBe(
+            expect(transitionOrderToState.message).toBe(
                 'Cannot transition Order from "PaymentSettled" to "Delivered"',
             );
-            expect(transitionOrderToState!.transitionError).toContain(
+            expect(transitionOrderToState.transitionError).toContain(
                 'Cannot transition Order to the "Delivered" state unless all OrderItems are delivered',
             );
 
-            const result = await adminClient.query<GetOrder.Query, GetOrder.Variables>(GET_ORDER, {
+            const result = await adminClient.query(getOrderDocument, {
                 id: order.id,
             });
             expect(result.order?.state).toBe('PaymentSettled');

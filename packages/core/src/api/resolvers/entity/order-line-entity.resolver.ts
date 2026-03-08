@@ -1,6 +1,6 @@
 import { Parent, ResolveField, Resolver } from '@nestjs/graphql';
 
-import { Asset, Fulfillment, Order, OrderLine, ProductVariant } from '../../../entity';
+import { Asset, FulfillmentLine, Order, OrderLine, ProductVariant } from '../../../entity';
 import { AssetService, FulfillmentService, OrderService, ProductVariantService } from '../../../service';
 import { RequestContext } from '../../common/request-context';
 import { RelationPaths, Relations } from '../../decorators/relations.decorator';
@@ -31,10 +31,13 @@ export class OrderLineEntityResolver {
         @Ctx() ctx: RequestContext,
         @Parent() orderLine: OrderLine,
     ): Promise<Asset | undefined> {
-        if (orderLine.featuredAsset) {
-            return orderLine.featuredAsset;
-        } else {
+        // In some scenarios (e.g. modifying an order to add a new item), orderLine.featuredAsset is an object
+        // with only an `id`. Since the resolver expects the featuredAsset to be a full Asset object, we need to
+        // fetch the full Asset object if it's not already populated.
+        if (!orderLine.featuredAsset?.preview) {
             return this.assetService.getFeaturedAsset(ctx, orderLine);
+        } else {
+            return orderLine.featuredAsset;
         }
     }
 
@@ -48,13 +51,11 @@ export class OrderLineEntityResolver {
     }
 
     @ResolveField()
-    async fulfillments(
+    async fulfillmentLines(
         @Ctx() ctx: RequestContext,
         @Parent() orderLine: OrderLine,
         @Relations(Order) relations: RelationPaths<Order>,
-    ): Promise<Fulfillment[]> {
-        return this.fulfillmentService
-            .getFulfillmentsByOrderLineId(ctx, orderLine.id)
-            .then(results => results.map(r => r.fulfillment));
+    ): Promise<FulfillmentLine[]> {
+        return this.fulfillmentService.getFulfillmentsLinesForOrderLine(ctx, orderLine.id);
     }
 }

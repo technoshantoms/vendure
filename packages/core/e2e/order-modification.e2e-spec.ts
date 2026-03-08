@@ -1,4 +1,11 @@
-/* tslint:disable:no-non-null-assertion */
+/* eslint-disable @typescript-eslint/no-non-null-assertion */
+import {
+    ErrorCode,
+    ErrorResult,
+    GlobalFlag,
+    HistoryEntryType,
+    LanguageCode,
+} from '@vendure/common/lib/generated-types';
 import { omit } from '@vendure/common/lib/omit';
 import { pick } from '@vendure/common/lib/pick';
 import { summate } from '@vendure/common/lib/shared-utils';
@@ -6,20 +13,25 @@ import {
     defaultShippingCalculator,
     defaultShippingEligibilityChecker,
     freeShipping,
-    manualFulfillmentHandler,
     mergeConfig,
     minimumOrderAmount,
-    orderFixedDiscount,
+    Order,
+    OrderItemPriceCalculationStrategy,
     orderPercentageDiscount,
+    PriceCalculationResult,
     productsPercentageDiscount,
+    ProductVariant,
+    RequestContext,
     ShippingCalculator,
 } from '@vendure/core';
 import { createErrorResultGuard, createTestEnvironment, ErrorResultGuard } from '@vendure/testing';
-import gql from 'graphql-tag';
 import path from 'path';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { initialData } from '../../../e2e-common/e2e-initial-data';
-import { testConfig, TEST_SETUP_TIMEOUT_MS } from '../../../e2e-common/test-config';
+import { TEST_SETUP_TIMEOUT_MS, testConfig } from '../../../e2e-common/test-config';
+import { manualFulfillmentHandler } from '../src/config/fulfillment/manual-fulfillment-handler';
+import { orderFixedDiscount } from '../src/config/promotion/actions/order-fixed-discount-action';
 
 import {
     failsToSettlePaymentMethod,
@@ -27,67 +39,188 @@ import {
     testSuccessfulPaymentMethod,
 } from './fixtures/test-payment-methods';
 import {
-    AddManualPayment,
-    AdminTransition,
-    CreateFulfillment,
-    CreatePromotion,
-    CreatePromotionMutation,
-    CreatePromotionMutationVariables,
-    CreateShippingMethod,
-    DeletePromotionMutation,
-    DeletePromotionMutationVariables,
-    ErrorCode,
-    GetOrder,
-    GetOrderHistory,
-    GetOrderQuery,
-    GetOrderQueryVariables,
-    GetOrderWithModifications,
-    GetOrderWithModificationsQuery,
-    GetOrderWithModificationsQueryVariables,
-    GetProductVariantListQuery,
-    GetProductVariantListQueryVariables,
-    GetStockMovement,
-    GlobalFlag,
-    HistoryEntryType,
-    LanguageCode,
-    ModifyOrder,
-    ModifyOrderMutation,
-    ModifyOrderMutationVariables,
-    OrderFragment,
-    OrderWithLinesFragment,
-    OrderWithModificationsFragment,
-    UpdateChannel,
-    UpdateProductVariants,
-} from './graphql/generated-e2e-admin-types';
+    orderFragment,
+    orderWithLinesFragment,
+    orderWithModificationsFragment,
+} from './graphql/fragments-admin';
+import { graphql as adminGraphql, FragmentOf } from './graphql/graphql-admin';
+import { graphql, VariablesOf } from './graphql/graphql-shop';
 import {
-    AddItemToOrderMutationVariables,
-    ApplyCouponCode,
-    SetShippingAddress,
-    SetShippingMethod,
-    TestOrderWithPaymentsFragment,
-    TransitionToState,
-    UpdatedOrderFragment,
-} from './graphql/generated-e2e-shop-types';
-import {
-    ADMIN_TRANSITION_TO_STATE,
-    CREATE_FULFILLMENT,
-    CREATE_PROMOTION,
-    CREATE_SHIPPING_METHOD,
-    DELETE_PROMOTION,
-    GET_ORDER,
-    GET_ORDER_HISTORY,
-    GET_PRODUCT_VARIANT_LIST,
-    GET_STOCK_MOVEMENT,
-    UPDATE_CHANNEL,
-    UPDATE_PRODUCT_VARIANTS,
+    addManualPaymentToOrderDocument,
+    adminTransitionToStateDocument,
+    createFulfillmentDocument,
+    createPromotionDocument,
+    createShippingMethodDocument,
+    deletePromotionDocument,
+    getOrderDocument,
+    getOrderHistoryDocument,
+    getOrderWithCustomFieldsDocument,
+    getOrderWithModificationsDocument,
+    getProductVariantListDocument,
+    getStockMovementDocument,
+    modifyOrderDocument,
+    updateChannelDocument,
+    updateProductVariantsDocument,
 } from './graphql/shared-definitions';
 import {
-    APPLY_COUPON_CODE,
-    SET_SHIPPING_ADDRESS,
-    SET_SHIPPING_METHOD,
-    TRANSITION_TO_STATE,
+    applyCouponCodeDocument,
+    setShippingAddressDocument,
+    setShippingMethodDocument,
+    testOrderWithPaymentsFragment,
+    transitionToStateDocument,
 } from './graphql/shop-definitions';
 import { addPaymentToOrder, proceedToArrangingPayment, sortById } from './utils/test-order-utils';
+
+const addItemToOrderWithCustomFieldsDocument = graphql(`
+    mutation AddItemToOrder(
+        $productVariantId: ID!
+        $quantity: Int!
+        $customFields: OrderLineCustomFieldsInput
+    ) {
+        addItemToOrder(
+            productVariantId: $productVariantId
+            quantity: $quantity
+            customFields: $customFields
+        ) {
+            ... on Order {
+                id
+            }
+            ... on ErrorResult {
+                errorCode
+                message
+            }
+        }
+    }
+`);
+
+// Local document with extended refund fields for testing
+const modifyOrderForTestDocument = adminGraphql(`
+    mutation ModifyOrderForTest($input: ModifyOrderInput!) {
+        modifyOrder(input: $input) {
+            ... on Order {
+                id
+                state
+                subTotal
+                subTotalWithTax
+                shipping
+                shippingWithTax
+                total
+                totalWithTax
+                lines {
+                    id
+                    quantity
+                    orderPlacedQuantity
+                    linePrice
+                    linePriceWithTax
+                    unitPriceWithTax
+                    discountedLinePriceWithTax
+                    proratedLinePriceWithTax
+                    proratedUnitPriceWithTax
+                    discounts {
+                        description
+                        amountWithTax
+                    }
+                    productVariant {
+                        id
+                        name
+                    }
+                }
+                surcharges {
+                    id
+                    description
+                    sku
+                    price
+                    priceWithTax
+                    taxRate
+                }
+                payments {
+                    id
+                    transactionId
+                    amount
+                    method
+                    state
+                    nextStates
+                    metadata
+                    refunds {
+                        id
+                        total
+                        reason
+                        state
+                        paymentId
+                    }
+                }
+                modifications {
+                    id
+                    note
+                    priceChange
+                    isSettled
+                    lines {
+                        orderLineId
+                        quantity
+                    }
+                    surcharges {
+                        id
+                    }
+                    payment {
+                        id
+                        state
+                        amount
+                        method
+                    }
+                    refund {
+                        id
+                        state
+                        total
+                        paymentId
+                    }
+                }
+                promotions {
+                    id
+                    name
+                    couponCode
+                }
+                discounts {
+                    description
+                    adjustmentSource
+                    amount
+                    amountWithTax
+                }
+                shippingLines {
+                    id
+                    discountedPriceWithTax
+                    shippingMethod {
+                        id
+                        name
+                    }
+                }
+            }
+            ... on ErrorResult {
+                errorCode
+                message
+            }
+        }
+    }
+`);
+
+export class TestOrderItemPriceCalculationStrategy implements OrderItemPriceCalculationStrategy {
+    calculateUnitPrice(
+        ctx: RequestContext,
+        productVariant: ProductVariant,
+        orderLineCustomFields: { [key: string]: any },
+        order: Order,
+    ): PriceCalculationResult | Promise<PriceCalculationResult> {
+        if (orderLineCustomFields.color === 'hotpink') {
+            return {
+                price: 1337,
+                priceIncludesTax: true,
+            };
+        }
+        return {
+            price: productVariant.listPrice,
+            priceIncludesTax: productVariant.listPriceIncludesTax,
+        };
+    }
+}
 
 const SHIPPING_GB = 500;
 const SHIPPING_US = 1000;
@@ -95,18 +228,24 @@ const SHIPPING_OTHER = 750;
 const testCalculator = new ShippingCalculator({
     code: 'test-calculator',
     description: [{ languageCode: LanguageCode.en, value: 'Has metadata' }],
-    args: {},
+    args: {
+        surcharge: {
+            type: 'int',
+            defaultValue: 0,
+        },
+    },
     calculate: (ctx, order, args) => {
-        let price;
+        let price: number;
+        const surcharge = args.surcharge || 0;
         switch (order.shippingAddress.countryCode) {
             case 'GB':
-                price = SHIPPING_GB;
+                price = SHIPPING_GB + surcharge;
                 break;
             case 'US':
-                price = SHIPPING_US;
+                price = SHIPPING_US + surcharge;
                 break;
             default:
-                price = SHIPPING_OTHER;
+                price = SHIPPING_OTHER + surcharge;
         }
         return {
             price,
@@ -126,6 +265,9 @@ describe('Order modification', () => {
                     testFailingPaymentMethod,
                 ],
             },
+            orderOptions: {
+                orderItemPriceCalculationStrategy: new TestOrderItemPriceCalculationStrategy(),
+            },
             shippingOptions: {
                 shippingCalculators: [defaultShippingCalculator, testCalculator],
             },
@@ -138,9 +280,19 @@ describe('Order modification', () => {
 
     let orderId: string;
     let testShippingMethodId: string;
-    const orderGuard: ErrorResultGuard<
-        UpdatedOrderFragment | OrderWithModificationsFragment | OrderFragment
-    > = createErrorResultGuard(input => !!input.id);
+    let testExpressShippingMethodId: string;
+
+    type OrderFragment = FragmentOf<typeof orderFragment>;
+    const orderGuard: ErrorResultGuard<OrderFragment> = createErrorResultGuard(input => !!input.id);
+
+    type OrderWithModificationsFragment = FragmentOf<typeof orderWithModificationsFragment>;
+    const orderWithModificationsGuard: ErrorResultGuard<OrderWithModificationsFragment> =
+        createErrorResultGuard(input => !!input.id);
+
+    // Type aliases for fragment types
+    type OrderWithLinesFragment = FragmentOf<typeof orderWithLinesFragment>;
+    type TestOrderWithPaymentsFragment = FragmentOf<typeof testOrderWithPaymentsFragment>;
+    type AddItemInput = VariablesOf<typeof addItemToOrderWithCustomFieldsDocument> & { customFields?: any };
 
     beforeAll(async () => {
         await server.init({
@@ -166,30 +318,24 @@ describe('Order modification', () => {
         });
         await adminClient.asSuperAdmin();
 
-        await adminClient.query<UpdateProductVariants.Mutation, UpdateProductVariants.Variables>(
-            UPDATE_PRODUCT_VARIANTS,
-            {
-                input: [
-                    {
-                        id: 'T_1',
-                        trackInventory: GlobalFlag.TRUE,
-                    },
-                    {
-                        id: 'T_2',
-                        trackInventory: GlobalFlag.TRUE,
-                    },
-                    {
-                        id: 'T_3',
-                        trackInventory: GlobalFlag.TRUE,
-                    },
-                ],
-            },
-        );
+        await adminClient.query(updateProductVariantsDocument, {
+            input: [
+                {
+                    id: 'T_1',
+                    trackInventory: GlobalFlag.TRUE,
+                },
+                {
+                    id: 'T_2',
+                    trackInventory: GlobalFlag.TRUE,
+                },
+                {
+                    id: 'T_3',
+                    trackInventory: GlobalFlag.TRUE,
+                },
+            ],
+        });
 
-        const { createShippingMethod } = await adminClient.query<
-            CreateShippingMethod.Mutation,
-            CreateShippingMethod.Variables
-        >(CREATE_SHIPPING_METHOD, {
+        const { createShippingMethod } = await adminClient.query(createShippingMethodDocument, {
             input: {
                 code: 'new-method',
                 fulfillmentHandler: manualFulfillmentHandler.code,
@@ -211,16 +357,48 @@ describe('Order modification', () => {
         });
         testShippingMethodId = createShippingMethod.id;
 
+        const { createShippingMethod: shippingMethod2 } = await adminClient.query(
+            createShippingMethodDocument,
+            {
+                input: {
+                    code: 'new-method-express',
+                    fulfillmentHandler: manualFulfillmentHandler.code,
+                    checker: {
+                        code: defaultShippingEligibilityChecker.code,
+                        arguments: [
+                            {
+                                name: 'orderMinimum',
+                                value: '0',
+                            },
+                        ],
+                    },
+                    calculator: {
+                        code: testCalculator.code,
+                        arguments: [
+                            {
+                                name: 'surcharge',
+                                value: '500',
+                            },
+                        ],
+                    },
+                    translations: [
+                        { languageCode: LanguageCode.en, name: 'test method express', description: '' },
+                    ],
+                },
+            },
+        );
+        testExpressShippingMethodId = shippingMethod2.id;
+
         // create an order and check out
         await shopClient.asUserWithCredentials('hayden.zieme12@hotmail.com', 'test');
-        await shopClient.query(gql(ADD_ITEM_TO_ORDER_WITH_CUSTOM_FIELDS), {
+        await shopClient.query(addItemToOrderWithCustomFieldsDocument, {
             productVariantId: 'T_1',
             quantity: 1,
             customFields: {
                 color: 'green',
             },
-        } as any);
-        await shopClient.query(gql(ADD_ITEM_TO_ORDER_WITH_CUSTOM_FIELDS), {
+        });
+        await shopClient.query(addItemToOrderWithCustomFieldsDocument, {
             productVariantId: 'T_4',
             quantity: 2,
         });
@@ -235,21 +413,18 @@ describe('Order modification', () => {
     });
 
     it('modifyOrder returns error result when not in Modifying state', async () => {
-        const { order } = await adminClient.query<GetOrder.Query, GetOrder.Variables>(GET_ORDER, {
+        const { order } = await adminClient.query(getOrderDocument, {
             id: orderId,
         });
-        const { modifyOrder } = await adminClient.query<ModifyOrder.Mutation, ModifyOrder.Variables>(
-            MODIFY_ORDER,
-            {
-                input: {
-                    dryRun: false,
-                    orderId,
-                    adjustOrderLines: order!.lines.map(l => ({ orderLineId: l.id, quantity: 3 })),
-                },
+        const { modifyOrder } = await adminClient.query(modifyOrderDocument, {
+            input: {
+                dryRun: false,
+                orderId,
+                adjustOrderLines: order!.lines.map(l => ({ orderLineId: l.id, quantity: 3 })),
             },
-        );
+        });
 
-        orderGuard.assertErrorResult(modifyOrder);
+        orderWithModificationsGuard.assertErrorResult(modifyOrder);
         expect(modifyOrder.errorCode).toBe(ErrorCode.ORDER_MODIFICATION_STATE_ERROR);
     });
 
@@ -262,156 +437,132 @@ describe('Order modification', () => {
 
     describe('error cases', () => {
         it('no changes specified error', async () => {
-            const { modifyOrder } = await adminClient.query<ModifyOrder.Mutation, ModifyOrder.Variables>(
-                MODIFY_ORDER,
-                {
-                    input: {
-                        dryRun: false,
-                        orderId,
-                    },
+            const { modifyOrder } = await adminClient.query(modifyOrderDocument, {
+                input: {
+                    dryRun: false,
+                    orderId,
                 },
-            );
+            });
 
-            orderGuard.assertErrorResult(modifyOrder);
+            orderWithModificationsGuard.assertErrorResult(modifyOrder);
 
             expect(modifyOrder.errorCode).toBe(ErrorCode.NO_CHANGES_SPECIFIED_ERROR);
         });
 
         it('no refund paymentId specified', async () => {
-            const { order } = await adminClient.query<GetOrder.Query, GetOrder.Variables>(GET_ORDER, {
+            const { order } = await adminClient.query(getOrderDocument, {
                 id: orderId,
             });
-            const { modifyOrder } = await adminClient.query<ModifyOrder.Mutation, ModifyOrder.Variables>(
-                MODIFY_ORDER,
-                {
-                    input: {
-                        dryRun: false,
-                        orderId,
-                        surcharges: [{ price: -500, priceIncludesTax: true, description: 'Discount' }],
-                    },
+            const { modifyOrder } = await adminClient.query(modifyOrderDocument, {
+                input: {
+                    dryRun: false,
+                    orderId,
+                    surcharges: [{ price: -500, priceIncludesTax: true, description: 'Discount' }],
                 },
-            );
-            orderGuard.assertErrorResult(modifyOrder);
+            });
+            orderWithModificationsGuard.assertErrorResult(modifyOrder);
 
             expect(modifyOrder.errorCode).toBe(ErrorCode.REFUND_PAYMENT_ID_MISSING_ERROR);
             await assertOrderIsUnchanged(order!);
         });
 
         it('addItems negative quantity', async () => {
-            const { order } = await adminClient.query<GetOrder.Query, GetOrder.Variables>(GET_ORDER, {
+            const { order } = await adminClient.query(getOrderDocument, {
                 id: orderId,
             });
-            const { modifyOrder } = await adminClient.query<ModifyOrder.Mutation, ModifyOrder.Variables>(
-                MODIFY_ORDER,
-                {
-                    input: {
-                        dryRun: false,
-                        orderId,
-                        addItems: [{ productVariantId: 'T_3', quantity: -1 }],
-                    },
+            const { modifyOrder } = await adminClient.query(modifyOrderDocument, {
+                input: {
+                    dryRun: false,
+                    orderId,
+                    addItems: [{ productVariantId: 'T_3', quantity: -1 }],
                 },
-            );
-            orderGuard.assertErrorResult(modifyOrder);
+            });
+            orderWithModificationsGuard.assertErrorResult(modifyOrder);
 
             expect(modifyOrder.errorCode).toBe(ErrorCode.NEGATIVE_QUANTITY_ERROR);
             await assertOrderIsUnchanged(order!);
         });
 
         it('adjustOrderLines negative quantity', async () => {
-            const { order } = await adminClient.query<GetOrder.Query, GetOrder.Variables>(GET_ORDER, {
+            const { order } = await adminClient.query(getOrderDocument, {
                 id: orderId,
             });
-            const { modifyOrder } = await adminClient.query<ModifyOrder.Mutation, ModifyOrder.Variables>(
-                MODIFY_ORDER,
-                {
-                    input: {
-                        dryRun: false,
-                        orderId,
-                        adjustOrderLines: [{ orderLineId: order!.lines[0].id, quantity: -1 }],
-                    },
+            const { modifyOrder } = await adminClient.query(modifyOrderDocument, {
+                input: {
+                    dryRun: false,
+                    orderId,
+                    adjustOrderLines: [{ orderLineId: order!.lines[0].id, quantity: -1 }],
                 },
-            );
-            orderGuard.assertErrorResult(modifyOrder);
+            });
+            orderWithModificationsGuard.assertErrorResult(modifyOrder);
 
             expect(modifyOrder.errorCode).toBe(ErrorCode.NEGATIVE_QUANTITY_ERROR);
             await assertOrderIsUnchanged(order!);
         });
 
         it('addItems insufficient stock', async () => {
-            const { order } = await adminClient.query<GetOrder.Query, GetOrder.Variables>(GET_ORDER, {
+            const { order } = await adminClient.query(getOrderDocument, {
                 id: orderId,
             });
-            const { modifyOrder } = await adminClient.query<ModifyOrder.Mutation, ModifyOrder.Variables>(
-                MODIFY_ORDER,
-                {
-                    input: {
-                        dryRun: false,
-                        orderId,
-                        addItems: [{ productVariantId: 'T_3', quantity: 500 }],
-                    },
+            const { modifyOrder } = await adminClient.query(modifyOrderDocument, {
+                input: {
+                    dryRun: false,
+                    orderId,
+                    addItems: [{ productVariantId: 'T_3', quantity: 500 }],
                 },
-            );
-            orderGuard.assertErrorResult(modifyOrder);
+            });
+            orderWithModificationsGuard.assertErrorResult(modifyOrder);
 
             expect(modifyOrder.errorCode).toBe(ErrorCode.INSUFFICIENT_STOCK_ERROR);
             await assertOrderIsUnchanged(order!);
         });
 
         it('adjustOrderLines insufficient stock', async () => {
-            const { order } = await adminClient.query<GetOrder.Query, GetOrder.Variables>(GET_ORDER, {
+            const { order } = await adminClient.query(getOrderDocument, {
                 id: orderId,
             });
-            const { modifyOrder } = await adminClient.query<ModifyOrder.Mutation, ModifyOrder.Variables>(
-                MODIFY_ORDER,
-                {
-                    input: {
-                        dryRun: false,
-                        orderId,
-                        adjustOrderLines: [{ orderLineId: order!.lines[0].id, quantity: 500 }],
-                    },
+            const { modifyOrder } = await adminClient.query(modifyOrderDocument, {
+                input: {
+                    dryRun: false,
+                    orderId,
+                    adjustOrderLines: [{ orderLineId: order!.lines[0].id, quantity: 500 }],
                 },
-            );
-            orderGuard.assertErrorResult(modifyOrder);
+            });
+            orderWithModificationsGuard.assertErrorResult(modifyOrder);
 
             expect(modifyOrder.errorCode).toBe(ErrorCode.INSUFFICIENT_STOCK_ERROR);
             await assertOrderIsUnchanged(order!);
         });
 
         it('addItems order limit', async () => {
-            const { order } = await adminClient.query<GetOrder.Query, GetOrder.Variables>(GET_ORDER, {
+            const { order } = await adminClient.query(getOrderDocument, {
                 id: orderId,
             });
-            const { modifyOrder } = await adminClient.query<ModifyOrder.Mutation, ModifyOrder.Variables>(
-                MODIFY_ORDER,
-                {
-                    input: {
-                        dryRun: false,
-                        orderId,
-                        addItems: [{ productVariantId: 'T_4', quantity: 9999 }],
-                    },
+            const { modifyOrder } = await adminClient.query(modifyOrderDocument, {
+                input: {
+                    dryRun: false,
+                    orderId,
+                    addItems: [{ productVariantId: 'T_4', quantity: 9999 }],
                 },
-            );
-            orderGuard.assertErrorResult(modifyOrder);
+            });
+            orderWithModificationsGuard.assertErrorResult(modifyOrder);
 
             expect(modifyOrder.errorCode).toBe(ErrorCode.ORDER_LIMIT_ERROR);
             await assertOrderIsUnchanged(order!);
         });
 
         it('adjustOrderLines order limit', async () => {
-            const { order } = await adminClient.query<GetOrder.Query, GetOrder.Variables>(GET_ORDER, {
+            const { order } = await adminClient.query(getOrderDocument, {
                 id: orderId,
             });
-            const { modifyOrder } = await adminClient.query<ModifyOrder.Mutation, ModifyOrder.Variables>(
-                MODIFY_ORDER,
-                {
-                    input: {
-                        dryRun: false,
-                        orderId,
-                        adjustOrderLines: [{ orderLineId: order!.lines[1].id, quantity: 9999 }],
-                    },
+            const { modifyOrder } = await adminClient.query(modifyOrderDocument, {
+                input: {
+                    dryRun: false,
+                    orderId,
+                    adjustOrderLines: [{ orderLineId: order!.lines[1].id, quantity: 9999 }],
                 },
-            );
-            orderGuard.assertErrorResult(modifyOrder);
+            });
+            orderWithModificationsGuard.assertErrorResult(modifyOrder);
 
             expect(modifyOrder.errorCode).toBe(ErrorCode.ORDER_LIMIT_ERROR);
             await assertOrderIsUnchanged(order!);
@@ -420,20 +571,17 @@ describe('Order modification', () => {
 
     describe('dry run', () => {
         it('addItems', async () => {
-            const { order } = await adminClient.query<GetOrder.Query, GetOrder.Variables>(GET_ORDER, {
+            const { order } = await adminClient.query(getOrderDocument, {
                 id: orderId,
             });
-            const { modifyOrder } = await adminClient.query<ModifyOrder.Mutation, ModifyOrder.Variables>(
-                MODIFY_ORDER,
-                {
-                    input: {
-                        dryRun: true,
-                        orderId,
-                        addItems: [{ productVariantId: 'T_5', quantity: 1 }],
-                    },
+            const { modifyOrder } = await adminClient.query(modifyOrderDocument, {
+                input: {
+                    dryRun: true,
+                    orderId,
+                    addItems: [{ productVariantId: 'T_5', quantity: 1 }],
                 },
-            );
-            orderGuard.assertSuccess(modifyOrder);
+            });
+            orderWithModificationsGuard.assertSuccess(modifyOrder);
 
             const expectedTotal = order!.totalWithTax + Math.round(14374 * 1.2); // price of variant T_5
             expect(modifyOrder.totalWithTax).toBe(expectedTotal);
@@ -442,22 +590,19 @@ describe('Order modification', () => {
         });
 
         it('addItems with existing variant id increments existing OrderLine', async () => {
-            const { order } = await adminClient.query<GetOrder.Query, GetOrder.Variables>(GET_ORDER, {
+            const { order } = await adminClient.query(getOrderDocument, {
                 id: orderId,
             });
-            const { modifyOrder } = await adminClient.query<ModifyOrder.Mutation, ModifyOrder.Variables>(
-                MODIFY_ORDER,
-                {
-                    input: {
-                        dryRun: true,
-                        orderId,
-                        addItems: [
-                            { productVariantId: 'T_1', quantity: 1, customFields: { color: 'green' } } as any,
-                        ],
-                    },
+            const { modifyOrder } = await adminClient.query(modifyOrderDocument, {
+                input: {
+                    dryRun: true,
+                    orderId,
+                    addItems: [
+                        { productVariantId: 'T_1', quantity: 1, customFields: { color: 'green' } } as any,
+                    ],
                 },
-            );
-            orderGuard.assertSuccess(modifyOrder);
+            });
+            orderWithModificationsGuard.assertSuccess(modifyOrder);
 
             const lineT1 = modifyOrder.lines.find(l => l.productVariant.id === 'T_1');
             expect(modifyOrder.lines.length).toBe(2);
@@ -466,22 +611,19 @@ describe('Order modification', () => {
         });
 
         it('addItems with existing variant id but different customFields adds new OrderLine', async () => {
-            const { order } = await adminClient.query<GetOrder.Query, GetOrder.Variables>(GET_ORDER, {
+            const { order } = await adminClient.query(getOrderDocument, {
                 id: orderId,
             });
-            const { modifyOrder } = await adminClient.query<ModifyOrder.Mutation, ModifyOrder.Variables>(
-                MODIFY_ORDER,
-                {
-                    input: {
-                        dryRun: true,
-                        orderId,
-                        addItems: [
-                            { productVariantId: 'T_1', quantity: 1, customFields: { color: 'blue' } } as any,
-                        ],
-                    },
+            const { modifyOrder } = await adminClient.query(modifyOrderDocument, {
+                input: {
+                    dryRun: true,
+                    orderId,
+                    addItems: [
+                        { productVariantId: 'T_1', quantity: 1, customFields: { color: 'blue' } } as any,
+                    ],
                 },
-            );
-            orderGuard.assertSuccess(modifyOrder);
+            });
+            orderWithModificationsGuard.assertSuccess(modifyOrder);
 
             const lineT1 = modifyOrder.lines.find(l => l.productVariant.id === 'T_1');
             expect(modifyOrder.lines.length).toBe(3);
@@ -496,96 +638,84 @@ describe('Order modification', () => {
         });
 
         it('adjustOrderLines up', async () => {
-            const { order } = await adminClient.query<GetOrder.Query, GetOrder.Variables>(GET_ORDER, {
+            const { order } = await adminClient.query(getOrderDocument, {
                 id: orderId,
             });
-            const { modifyOrder } = await adminClient.query<ModifyOrder.Mutation, ModifyOrder.Variables>(
-                MODIFY_ORDER,
-                {
-                    input: {
-                        dryRun: true,
-                        orderId,
-                        adjustOrderLines: [{ orderLineId: order!.lines[0].id, quantity: 3 }],
-                    },
+            const { modifyOrder } = await adminClient.query(modifyOrderDocument, {
+                input: {
+                    dryRun: true,
+                    orderId,
+                    adjustOrderLines: [{ orderLineId: order!.lines[0].id, quantity: 3 }],
                 },
-            );
-            orderGuard.assertSuccess(modifyOrder);
+            });
+            orderWithModificationsGuard.assertSuccess(modifyOrder);
 
             const expectedTotal = order!.totalWithTax + order!.lines[0].unitPriceWithTax * 2;
-            expect(modifyOrder.lines[0].items.length).toBe(3);
+            expect(modifyOrder.lines[0].quantity).toBe(3);
             expect(modifyOrder.totalWithTax).toBe(expectedTotal);
             await assertOrderIsUnchanged(order!);
         });
 
         it('adjustOrderLines down', async () => {
-            const { order } = await adminClient.query<GetOrder.Query, GetOrder.Variables>(GET_ORDER, {
+            const { order } = await adminClient.query(getOrderDocument, {
                 id: orderId,
             });
-            const { modifyOrder } = await adminClient.query<ModifyOrder.Mutation, ModifyOrder.Variables>(
-                MODIFY_ORDER,
-                {
-                    input: {
-                        dryRun: true,
-                        orderId,
-                        adjustOrderLines: [{ orderLineId: order!.lines[1].id, quantity: 1 }],
-                    },
+            const { modifyOrder } = await adminClient.query(modifyOrderDocument, {
+                input: {
+                    dryRun: true,
+                    orderId,
+                    adjustOrderLines: [{ orderLineId: order!.lines[1].id, quantity: 1 }],
                 },
-            );
-            orderGuard.assertSuccess(modifyOrder);
+            });
+            orderWithModificationsGuard.assertSuccess(modifyOrder);
 
             const expectedTotal = order!.totalWithTax - order!.lines[1].unitPriceWithTax;
-            expect(modifyOrder.lines[1].items.filter(i => i.cancelled).length).toBe(1);
-            expect(modifyOrder.lines[1].items.filter(i => !i.cancelled).length).toBe(1);
+            expect(modifyOrder.lines[1].quantity).toBe(1);
             expect(modifyOrder.totalWithTax).toBe(expectedTotal);
             await assertOrderIsUnchanged(order!);
         });
 
         it('adjustOrderLines to zero', async () => {
-            const { order } = await adminClient.query<GetOrder.Query, GetOrder.Variables>(GET_ORDER, {
+            const { order } = await adminClient.query(getOrderDocument, {
                 id: orderId,
             });
-            const { modifyOrder } = await adminClient.query<ModifyOrder.Mutation, ModifyOrder.Variables>(
-                MODIFY_ORDER,
-                {
-                    input: {
-                        dryRun: true,
-                        orderId,
-                        adjustOrderLines: [{ orderLineId: order!.lines[0].id, quantity: 0 }],
-                    },
+            const { modifyOrder } = await adminClient.query(modifyOrderDocument, {
+                input: {
+                    dryRun: true,
+                    orderId,
+                    adjustOrderLines: [{ orderLineId: order!.lines[0].id, quantity: 0 }],
                 },
-            );
-            orderGuard.assertSuccess(modifyOrder);
+            });
+            orderWithModificationsGuard.assertSuccess(modifyOrder);
 
-            const expectedTotal = order!.totalWithTax - order!.lines[0].linePriceWithTax;
+            const expectedTotal =
+                order!.totalWithTax - order!.lines[0].unitPriceWithTax * order!.lines[0].quantity;
             expect(modifyOrder.totalWithTax).toBe(expectedTotal);
-            expect(modifyOrder.lines[0].items.every(i => i.cancelled)).toBe(true);
+            expect(modifyOrder.lines[0].quantity).toBe(0);
             await assertOrderIsUnchanged(order!);
         });
 
         it('surcharge positive', async () => {
-            const { order } = await adminClient.query<GetOrder.Query, GetOrder.Variables>(GET_ORDER, {
+            const { order } = await adminClient.query(getOrderDocument, {
                 id: orderId,
             });
-            const { modifyOrder } = await adminClient.query<ModifyOrder.Mutation, ModifyOrder.Variables>(
-                MODIFY_ORDER,
-                {
-                    input: {
-                        dryRun: true,
-                        orderId,
-                        surcharges: [
-                            {
-                                description: 'extra fee',
-                                sku: '123',
-                                price: 300,
-                                priceIncludesTax: true,
-                                taxRate: 20,
-                                taxDescription: 'VAT',
-                            },
-                        ],
-                    },
+            const { modifyOrder } = await adminClient.query(modifyOrderDocument, {
+                input: {
+                    dryRun: true,
+                    orderId,
+                    surcharges: [
+                        {
+                            description: 'extra fee',
+                            sku: '123',
+                            price: 300,
+                            priceIncludesTax: true,
+                            taxRate: 20,
+                            taxDescription: 'VAT',
+                        },
+                    ],
                 },
-            );
-            orderGuard.assertSuccess(modifyOrder);
+            });
+            orderWithModificationsGuard.assertSuccess(modifyOrder);
 
             const expectedTotal = order!.totalWithTax + 300;
             expect(modifyOrder.totalWithTax).toBe(expectedTotal);
@@ -602,29 +732,26 @@ describe('Order modification', () => {
         });
 
         it('surcharge negative', async () => {
-            const { order } = await adminClient.query<GetOrder.Query, GetOrder.Variables>(GET_ORDER, {
+            const { order } = await adminClient.query(getOrderDocument, {
                 id: orderId,
             });
-            const { modifyOrder } = await adminClient.query<ModifyOrder.Mutation, ModifyOrder.Variables>(
-                MODIFY_ORDER,
-                {
-                    input: {
-                        dryRun: true,
-                        orderId,
-                        surcharges: [
-                            {
-                                description: 'special discount',
-                                sku: '123',
-                                price: -300,
-                                priceIncludesTax: true,
-                                taxRate: 20,
-                                taxDescription: 'VAT',
-                            },
-                        ],
-                    },
+            const { modifyOrder } = await adminClient.query(modifyOrderDocument, {
+                input: {
+                    dryRun: true,
+                    orderId,
+                    surcharges: [
+                        {
+                            description: 'special discount',
+                            sku: '123',
+                            price: -300,
+                            priceIncludesTax: true,
+                            taxRate: 20,
+                            taxDescription: 'VAT',
+                        },
+                    ],
                 },
-            );
-            orderGuard.assertSuccess(modifyOrder);
+            });
+            orderWithModificationsGuard.assertSuccess(modifyOrder);
 
             const expectedTotal = order!.totalWithTax + -300;
             expect(modifyOrder.totalWithTax).toBe(expectedTotal);
@@ -640,29 +767,79 @@ describe('Order modification', () => {
             await assertOrderIsUnchanged(order!);
         });
 
-        it('does not add a history entry', async () => {
-            const { order } = await adminClient.query<GetOrder.Query, GetOrder.Variables>(GET_ORDER, {
+        it('the configured OrderItemPriceCalculationStrategy is applied', async () => {
+            const { order } = await adminClient.query(getOrderDocument, {
                 id: orderId,
             });
-            const { modifyOrder } = await adminClient.query<ModifyOrder.Mutation, ModifyOrder.Variables>(
-                MODIFY_ORDER,
+            const { modifyOrder } = await adminClient.query(modifyOrderDocument, {
+                input: {
+                    dryRun: true,
+                    orderId,
+                    adjustOrderLines: [
+                        {
+                            orderLineId: order!.lines[1].id,
+                            quantity: 1,
+                            customFields: { color: 'hotpink' },
+                        } as any,
+                    ],
+                },
+            });
+            orderWithModificationsGuard.assertSuccess(modifyOrder);
+
+            const expectedTotal = order!.totalWithTax - order!.lines[1].unitPriceWithTax;
+            expect(modifyOrder.lines[1].quantity).toBe(1);
+            expect(modifyOrder.lines[1].linePriceWithTax).toBe(1337);
+            await assertOrderIsUnchanged(order!);
+        });
+
+        it('changing shipping method', async () => {
+            const { order } = await adminClient.query(getOrderDocument, {
+                id: orderId,
+            });
+            const { modifyOrder } = await adminClient.query(modifyOrderDocument, {
+                input: {
+                    dryRun: true,
+                    orderId,
+                    shippingMethodIds: [testExpressShippingMethodId],
+                },
+            });
+            orderWithModificationsGuard.assertSuccess(modifyOrder);
+
+            const expectedTotal = order!.totalWithTax + 500;
+            expect(modifyOrder.totalWithTax).toBe(expectedTotal);
+            expect(modifyOrder.shippingLines).toEqual([
                 {
-                    input: {
-                        dryRun: true,
-                        orderId,
-                        addItems: [{ productVariantId: 'T_5', quantity: 1 }],
+                    id: 'T_1',
+                    discountedPriceWithTax: 1500,
+                    shippingMethod: {
+                        id: testExpressShippingMethodId,
+                        name: 'test method express',
                     },
                 },
-            );
-            orderGuard.assertSuccess(modifyOrder);
+            ]);
+            await assertOrderIsUnchanged(order!);
+        });
 
-            const { order: history } = await adminClient.query<
-                GetOrderHistory.Query,
-                GetOrderHistory.Variables
-            >(GET_ORDER_HISTORY, {
+        it('does not add a history entry', async () => {
+            const { order } = await adminClient.query(getOrderDocument, {
+                id: orderId,
+            });
+            const { modifyOrder } = await adminClient.query(modifyOrderDocument, {
+                input: {
+                    dryRun: true,
+                    orderId,
+                    addItems: [{ productVariantId: 'T_5', quantity: 1 }],
+                },
+            });
+            orderWithModificationsGuard.assertSuccess(modifyOrder);
+
+            const { order: history } = await adminClient.query(getOrderHistoryDocument, {
                 id: orderId,
                 options: { filter: { type: { eq: HistoryEntryType.ORDER_MODIFIED } } },
             });
+            if (!history) {
+                throw new Error('History not found');
+            }
             orderGuard.assertSuccess(history);
 
             expect(history.history.totalItems).toBe(0);
@@ -671,15 +848,15 @@ describe('Order modification', () => {
 
     describe('wet run', () => {
         async function assertModifiedOrderIsPersisted(order: OrderWithModificationsFragment) {
-            const { order: order2 } = await adminClient.query<GetOrder.Query, GetOrder.Variables>(GET_ORDER, {
+            const { order: order2 } = await adminClient.query(getOrderDocument, {
                 id: order.id,
             });
-            expect(order2!.totalWithTax).toBe(order!.totalWithTax);
-            expect(order2!.lines.length).toBe(order!.lines.length);
-            expect(order2!.surcharges.length).toBe(order!.surcharges.length);
-            expect(order2!.payments!.length).toBe(order!.payments!.length);
+            expect(order2!.totalWithTax).toBe(order.totalWithTax);
+            expect(order2!.lines.length).toBe(order.lines.length);
+            expect(order2!.surcharges.length).toBe(order.surcharges.length);
+            expect(order2!.payments!.length).toBe(order.payments!.length);
             expect(order2!.payments!.map(p => pick(p, ['id', 'amount', 'method']))).toEqual(
-                order!.payments!.map(p => pick(p, ['id', 'amount', 'method'])),
+                order.payments!.map(p => pick(p, ['id', 'amount', 'method'])),
             );
         }
 
@@ -690,27 +867,24 @@ describe('Order modification', () => {
                     quantity: 1,
                 },
             ]);
-            const { modifyOrder } = await adminClient.query<ModifyOrder.Mutation, ModifyOrder.Variables>(
-                MODIFY_ORDER,
-                {
-                    input: {
-                        dryRun: false,
-                        orderId: order.id,
-                        addItems: [{ productVariantId: 'T_5', quantity: 1 }],
-                    },
+            const { modifyOrder } = await adminClient.query(modifyOrderDocument, {
+                input: {
+                    dryRun: false,
+                    orderId: order.id,
+                    addItems: [{ productVariantId: 'T_5', quantity: 1 }],
                 },
-            );
-            orderGuard.assertSuccess(modifyOrder);
+            });
+            orderWithModificationsGuard.assertSuccess(modifyOrder);
 
             const priceDelta = Math.round(14374 * 1.2); // price of variant T_5
-            const expectedTotal = order!.totalWithTax + priceDelta;
+            const expectedTotal = order.totalWithTax + priceDelta;
             expect(modifyOrder.totalWithTax).toBe(expectedTotal);
-            expect(modifyOrder.lines.length).toBe(order!.lines.length + 1);
+            expect(modifyOrder.lines.length).toBe(order.lines.length + 1);
             expect(modifyOrder.modifications.length).toBe(1);
             expect(modifyOrder.modifications[0].priceChange).toBe(priceDelta);
-            expect(modifyOrder.modifications[0].orderItems?.length).toBe(1);
-            expect(modifyOrder.modifications[0].orderItems?.map(i => i.id)).toEqual([
-                modifyOrder.lines[1].items[0].id,
+            expect(modifyOrder.modifications[0].lines.length).toBe(1);
+            expect(modifyOrder.modifications[0].lines).toEqual([
+                { orderLineId: modifyOrder.lines[1].id, quantity: 1 },
             ]);
 
             await assertModifiedOrderIsPersisted(modifyOrder);
@@ -723,30 +897,23 @@ describe('Order modification', () => {
                     quantity: 1,
                 },
             ]);
-            const { modifyOrder } = await adminClient.query<ModifyOrder.Mutation, ModifyOrder.Variables>(
-                MODIFY_ORDER,
-                {
-                    input: {
-                        dryRun: false,
-                        orderId: order.id,
-                        adjustOrderLines: [{ orderLineId: order!.lines[0].id, quantity: 2 }],
-                    },
+            const { modifyOrder } = await adminClient.query(modifyOrderDocument, {
+                input: {
+                    dryRun: false,
+                    orderId: order.id,
+                    adjustOrderLines: [{ orderLineId: order.lines[0].id, quantity: 2 }],
                 },
-            );
-            orderGuard.assertSuccess(modifyOrder);
+            });
+            orderWithModificationsGuard.assertSuccess(modifyOrder);
 
-            const priceDelta = order!.lines[0].unitPriceWithTax;
-            const expectedTotal = order!.totalWithTax + priceDelta;
+            const priceDelta = order.lines[0].unitPriceWithTax;
+            const expectedTotal = order.totalWithTax + priceDelta;
             expect(modifyOrder.totalWithTax).toBe(expectedTotal);
             expect(modifyOrder.lines[0].quantity).toBe(2);
             expect(modifyOrder.modifications.length).toBe(1);
             expect(modifyOrder.modifications[0].priceChange).toBe(priceDelta);
-            expect(modifyOrder.modifications[0].orderItems?.length).toBe(1);
-            expect(
-                modifyOrder.lines[0].items
-                    .map(i => i.id)
-                    .includes(modifyOrder.modifications?.[0].orderItems?.[0].id as string),
-            ).toBe(true);
+            expect(modifyOrder.modifications[0].lines.length).toBe(1);
+            expect(modifyOrder.lines[0].id).toEqual(modifyOrder.modifications[0].lines[0].orderLineId);
             await assertModifiedOrderIsPersisted(modifyOrder);
         });
 
@@ -757,21 +924,18 @@ describe('Order modification', () => {
                     quantity: 2,
                 },
             ]);
-            const { modifyOrder } = await adminClient.query<ModifyOrder.Mutation, ModifyOrder.Variables>(
-                MODIFY_ORDER,
-                {
-                    input: {
-                        dryRun: false,
-                        orderId: order.id,
-                        adjustOrderLines: [{ orderLineId: order!.lines[0].id, quantity: 1 }],
-                        refund: { paymentId: order!.payments![0].id },
-                    },
+            const { modifyOrder } = await adminClient.query(modifyOrderForTestDocument, {
+                input: {
+                    dryRun: false,
+                    orderId: order.id,
+                    adjustOrderLines: [{ orderLineId: order.lines[0].id, quantity: 1 }],
+                    refund: { paymentId: order.payments![0].id },
                 },
-            );
-            orderGuard.assertSuccess(modifyOrder);
+            });
+            orderWithModificationsGuard.assertSuccess(modifyOrder);
 
-            const priceDelta = -order!.lines[0].unitPriceWithTax;
-            const expectedTotal = order!.totalWithTax + priceDelta;
+            const priceDelta = -order.lines[0].unitPriceWithTax;
+            const expectedTotal = order.totalWithTax + priceDelta;
             expect(modifyOrder.totalWithTax).toBe(expectedTotal);
             expect(modifyOrder.lines[0].quantity).toBe(1);
             expect(modifyOrder.payments?.length).toBe(1);
@@ -781,16 +945,13 @@ describe('Order modification', () => {
                 state: 'Pending',
                 total: -priceDelta,
                 paymentId: modifyOrder.payments?.[0].id,
+                reason: null,
             });
             expect(modifyOrder.modifications.length).toBe(1);
             expect(modifyOrder.modifications[0].priceChange).toBe(priceDelta);
             expect(modifyOrder.modifications[0].surcharges).toEqual(modifyOrder.surcharges.map(pick(['id'])));
-            expect(modifyOrder.modifications[0].orderItems?.length).toBe(1);
-            expect(
-                modifyOrder.lines[0].items
-                    .map(i => i.id)
-                    .includes(modifyOrder.modifications?.[0].orderItems?.[0].id as string),
-            ).toBe(true);
+            expect(modifyOrder.modifications[0].lines.length).toBe(1);
+            expect(modifyOrder.lines[0].id).toEqual(modifyOrder.modifications[0].lines[0].orderLineId);
             await assertModifiedOrderIsPersisted(modifyOrder);
         });
 
@@ -801,75 +962,69 @@ describe('Order modification', () => {
                     quantity: 1,
                     customFields: {
                         color: 'green',
-                    },
+                    } as any,
                 },
             ]);
-            const { modifyOrder } = await adminClient.query<ModifyOrder.Mutation, ModifyOrder.Variables>(
-                MODIFY_ORDER,
-                {
-                    input: {
-                        dryRun: false,
-                        orderId: order.id,
-                        adjustOrderLines: [
-                            {
-                                orderLineId: order!.lines[0].id,
-                                quantity: 1,
-                                customFields: { color: 'black' },
-                            } as any,
-                        ],
-                    },
+            const { modifyOrder } = await adminClient.query(modifyOrderDocument, {
+                input: {
+                    dryRun: false,
+                    orderId: order.id,
+                    adjustOrderLines: [
+                        {
+                            orderLineId: order.lines[0].id,
+                            quantity: 1,
+                            customFields: { color: 'black' },
+                        } as any,
+                    ],
                 },
-            );
-            orderGuard.assertSuccess(modifyOrder);
+            });
+            orderWithModificationsGuard.assertSuccess(modifyOrder);
             expect(modifyOrder.lines.length).toBe(1);
 
-            const { order: orderWithLines } = await adminClient.query(gql(GET_ORDER_WITH_CUSTOM_FIELDS), {
+            const { order: orderWithLines } = await adminClient.query(getOrderWithCustomFieldsDocument, {
                 id: order.id,
             });
+            if (!orderWithLines) {
+                throw new Error('Order with lines not found');
+            }
             expect(orderWithLines.lines[0]).toEqual({
-                id: order!.lines[0].id,
+                id: order.lines[0].id,
                 customFields: { color: 'black' },
             });
         });
 
         it('adjustOrderLines handles quantity correctly', async () => {
-            await adminClient.query<UpdateProductVariants.Mutation, UpdateProductVariants.Variables>(
-                UPDATE_PRODUCT_VARIANTS,
-                {
-                    input: [
-                        {
-                            id: 'T_6',
-                            stockOnHand: 1,
-                            trackInventory: GlobalFlag.TRUE,
-                        },
-                    ],
-                },
-            );
+            await adminClient.query(updateProductVariantsDocument, {
+                input: [
+                    {
+                        id: 'T_6',
+                        stockOnHand: 1,
+                        trackInventory: GlobalFlag.TRUE,
+                    },
+                ],
+            });
             const order = await createOrderAndTransitionToModifyingState([
                 {
                     productVariantId: 'T_6',
                     quantity: 1,
                 },
             ]);
-            const { modifyOrder } = await adminClient.query<ModifyOrder.Mutation, ModifyOrder.Variables>(
-                MODIFY_ORDER,
-                {
-                    input: {
-                        dryRun: false,
-                        orderId: order.id,
-                        adjustOrderLines: [
-                            {
-                                orderLineId: order.lines[0].id,
-                                quantity: 1,
-                            },
-                        ],
-                        updateShippingAddress: {
-                            fullName: 'Jim',
+            const { modifyOrder } = await adminClient.query(modifyOrderDocument, {
+                input: {
+                    dryRun: false,
+                    orderId: order.id,
+                    adjustOrderLines: [
+                        {
+                            orderLineId: order.lines[0].id,
+                            quantity: 1,
                         },
+                    ],
+                    updateShippingAddress: {
+                        fullName: 'Jim',
                     },
                 },
-            );
-            orderGuard.assertSuccess(modifyOrder);
+            });
+            orderWithModificationsGuard.assertSuccess(modifyOrder);
         });
 
         it('surcharge positive', async () => {
@@ -879,29 +1034,26 @@ describe('Order modification', () => {
                     quantity: 1,
                 },
             ]);
-            const { modifyOrder } = await adminClient.query<ModifyOrder.Mutation, ModifyOrder.Variables>(
-                MODIFY_ORDER,
-                {
-                    input: {
-                        dryRun: false,
-                        orderId: order.id,
-                        surcharges: [
-                            {
-                                description: 'extra fee',
-                                sku: '123',
-                                price: 300,
-                                priceIncludesTax: true,
-                                taxRate: 20,
-                                taxDescription: 'VAT',
-                            },
-                        ],
-                    },
+            const { modifyOrder } = await adminClient.query(modifyOrderDocument, {
+                input: {
+                    dryRun: false,
+                    orderId: order.id,
+                    surcharges: [
+                        {
+                            description: 'extra fee',
+                            sku: '123',
+                            price: 300,
+                            priceIncludesTax: true,
+                            taxRate: 20,
+                            taxDescription: 'VAT',
+                        },
+                    ],
                 },
-            );
-            orderGuard.assertSuccess(modifyOrder);
+            });
+            orderWithModificationsGuard.assertSuccess(modifyOrder);
 
             const priceDelta = 300;
-            const expectedTotal = order!.totalWithTax + priceDelta;
+            const expectedTotal = order.totalWithTax + priceDelta;
             expect(modifyOrder.totalWithTax).toBe(expectedTotal);
             expect(modifyOrder.surcharges.map(s => omit(s, ['id']))).toEqual([
                 {
@@ -925,31 +1077,28 @@ describe('Order modification', () => {
                     quantity: 1,
                 },
             ]);
-            const { modifyOrder } = await adminClient.query<ModifyOrder.Mutation, ModifyOrder.Variables>(
-                MODIFY_ORDER,
-                {
-                    input: {
-                        dryRun: false,
-                        orderId: order!.id,
-                        surcharges: [
-                            {
-                                description: 'special discount',
-                                sku: '123',
-                                price: -300,
-                                priceIncludesTax: true,
-                                taxRate: 20,
-                                taxDescription: 'VAT',
-                            },
-                        ],
-                        refund: {
-                            paymentId: order!.payments![0].id,
+            const { modifyOrder } = await adminClient.query(modifyOrderDocument, {
+                input: {
+                    dryRun: false,
+                    orderId: order.id,
+                    surcharges: [
+                        {
+                            description: 'special discount',
+                            sku: '123',
+                            price: -300,
+                            priceIncludesTax: true,
+                            taxRate: 20,
+                            taxDescription: 'VAT',
                         },
+                    ],
+                    refund: {
+                        paymentId: order.payments![0].id,
                     },
                 },
-            );
-            orderGuard.assertSuccess(modifyOrder);
+            });
+            orderWithModificationsGuard.assertSuccess(modifyOrder);
 
-            const expectedTotal = order!.totalWithTax + -300;
+            const expectedTotal = order.totalWithTax + -300;
             expect(modifyOrder.totalWithTax).toBe(expectedTotal);
             expect(modifyOrder.surcharges.map(s => omit(s, ['id']))).toEqual([
                 {
@@ -973,25 +1122,22 @@ describe('Order modification', () => {
                 },
             ]);
 
-            const { modifyOrder } = await adminClient.query<ModifyOrder.Mutation, ModifyOrder.Variables>(
-                MODIFY_ORDER,
-                {
-                    input: {
-                        dryRun: false,
-                        orderId: order!.id,
-                        updateShippingAddress: {
-                            countryCode: 'US',
-                        },
-                        options: {
-                            recalculateShipping: true,
-                        },
+            const { modifyOrder } = await adminClient.query(modifyOrderDocument, {
+                input: {
+                    dryRun: false,
+                    orderId: order.id,
+                    updateShippingAddress: {
+                        countryCode: 'US',
+                    },
+                    options: {
+                        recalculateShipping: true,
                     },
                 },
-            );
-            orderGuard.assertSuccess(modifyOrder);
+            });
+            orderWithModificationsGuard.assertSuccess(modifyOrder);
 
             const priceDelta = SHIPPING_US - SHIPPING_OTHER;
-            const expectedTotal = order!.totalWithTax + priceDelta;
+            const expectedTotal = order.totalWithTax + priceDelta;
             expect(modifyOrder.totalWithTax).toBe(expectedTotal);
             expect(modifyOrder.shippingAddress?.countryCode).toBe('US');
             expect(modifyOrder.modifications.length).toBe(1);
@@ -1007,25 +1153,22 @@ describe('Order modification', () => {
                 },
             ]);
 
-            const { modifyOrder } = await adminClient.query<ModifyOrder.Mutation, ModifyOrder.Variables>(
-                MODIFY_ORDER,
-                {
-                    input: {
-                        dryRun: false,
-                        orderId: order!.id,
-                        updateShippingAddress: {
-                            countryCode: 'US',
-                        },
-                        options: {
-                            recalculateShipping: false,
-                        },
+            const { modifyOrder } = await adminClient.query(modifyOrderDocument, {
+                input: {
+                    dryRun: false,
+                    orderId: order.id,
+                    updateShippingAddress: {
+                        countryCode: 'US',
+                    },
+                    options: {
+                        recalculateShipping: false,
                     },
                 },
-            );
-            orderGuard.assertSuccess(modifyOrder);
+            });
+            orderWithModificationsGuard.assertSuccess(modifyOrder);
 
             const priceDelta = 0;
-            const expectedTotal = order!.totalWithTax + priceDelta;
+            const expectedTotal = order.totalWithTax + priceDelta;
             expect(modifyOrder.totalWithTax).toBe(expectedTotal);
             expect(modifyOrder.shippingAddress?.countryCode).toBe('US');
             expect(modifyOrder.modifications.length).toBe(1);
@@ -1040,52 +1183,51 @@ describe('Order modification', () => {
                     quantity: 1,
                 },
             ]);
-            const { modifyOrder } = await adminClient.query<ModifyOrder.Mutation, ModifyOrder.Variables>(
-                MODIFY_ORDER,
-                {
-                    input: {
-                        dryRun: false,
-                        orderId: order.id,
-                        customFields: {
-                            points: 42,
-                        },
-                    } as any,
-                },
-            );
-            orderGuard.assertSuccess(modifyOrder);
+            const { modifyOrder } = await adminClient.query(modifyOrderDocument, {
+                input: {
+                    dryRun: false,
+                    orderId: order.id,
+                    customFields: {
+                        points: 42,
+                    },
+                } as any,
+            });
+            orderWithModificationsGuard.assertSuccess(modifyOrder);
 
             const { order: orderWithCustomFields } = await adminClient.query(
-                gql(GET_ORDER_WITH_CUSTOM_FIELDS),
-                { id: order.id },
+                getOrderWithCustomFieldsDocument,
+                {
+                    id: order.id,
+                },
             );
+            if (!orderWithCustomFields) {
+                throw new Error('Order with custom fields not found');
+            }
             expect(orderWithCustomFields.customFields).toEqual({
                 points: 42,
             });
         });
 
         it('adds a history entry', async () => {
-            const { order } = await adminClient.query<GetOrder.Query, GetOrder.Variables>(GET_ORDER, {
+            const { order } = await adminClient.query(getOrderDocument, {
                 id: orderId,
             });
-            const { modifyOrder } = await adminClient.query<ModifyOrder.Mutation, ModifyOrder.Variables>(
-                MODIFY_ORDER,
-                {
-                    input: {
-                        dryRun: false,
-                        orderId: order!.id,
-                        addItems: [{ productVariantId: 'T_5', quantity: 1 }],
-                    },
+            const { modifyOrder } = await adminClient.query(modifyOrderDocument, {
+                input: {
+                    dryRun: false,
+                    orderId: order!.id,
+                    addItems: [{ productVariantId: 'T_5', quantity: 1 }],
                 },
-            );
-            orderGuard.assertSuccess(modifyOrder);
+            });
+            orderWithModificationsGuard.assertSuccess(modifyOrder);
 
-            const { order: history } = await adminClient.query<
-                GetOrderHistory.Query,
-                GetOrderHistory.Variables
-            >(GET_ORDER_HISTORY, {
+            const { order: history } = await adminClient.query(getOrderHistoryDocument, {
                 id: orderId,
                 options: { filter: { type: { eq: HistoryEntryType.ORDER_MODIFIED } } },
             });
+            if (!history) {
+                throw new Error('History not found');
+            }
             orderGuard.assertSuccess(history);
 
             expect(history.history.totalItems).toBe(1);
@@ -1105,35 +1247,32 @@ describe('Order modification', () => {
                     quantity: 1,
                 },
             ]);
-            const { modifyOrder } = await adminClient.query<ModifyOrder.Mutation, ModifyOrder.Variables>(
-                MODIFY_ORDER,
-                {
-                    input: {
-                        dryRun: false,
-                        orderId: order.id,
-                        surcharges: [
-                            {
-                                description: 'extra fee',
-                                sku: '123',
-                                price: 300,
-                                priceIncludesTax: true,
-                                taxRate: 20,
-                                taxDescription: 'VAT',
-                            },
-                        ],
-                    },
+            const { modifyOrder } = await adminClient.query(modifyOrderDocument, {
+                input: {
+                    dryRun: false,
+                    orderId: order.id,
+                    surcharges: [
+                        {
+                            description: 'extra fee',
+                            sku: '123',
+                            price: 300,
+                            priceIncludesTax: true,
+                            taxRate: 20,
+                            taxDescription: 'VAT',
+                        },
+                    ],
                 },
-            );
-            orderGuard.assertSuccess(modifyOrder);
+            });
+            orderWithModificationsGuard.assertSuccess(modifyOrder);
             orderId2 = modifyOrder.id;
         });
 
         it('cannot transition back to original state if no payment is set', async () => {
             const transitionOrderToState = await adminTransitionOrderToState(orderId2, 'PaymentSettled');
             orderGuard.assertErrorResult(transitionOrderToState);
-            expect(transitionOrderToState!.errorCode).toBe(ErrorCode.ORDER_STATE_TRANSITION_ERROR);
-            expect(transitionOrderToState!.transitionError).toBe(
-                `Can only transition to the "ArrangingAdditionalPayment" state`,
+            expect(transitionOrderToState.errorCode).toBe(ErrorCode.ORDER_STATE_TRANSITION_ERROR);
+            expect((transitionOrderToState as any).transitionError).toBe(
+                'Can only transition to the "ArrangingAdditionalPayment" state',
             );
         });
 
@@ -1143,23 +1282,20 @@ describe('Order modification', () => {
                 'ArrangingAdditionalPayment',
             );
             orderGuard.assertSuccess(transitionOrderToState);
-            expect(transitionOrderToState!.state).toBe('ArrangingAdditionalPayment');
+            expect(transitionOrderToState.state).toBe('ArrangingAdditionalPayment');
         });
 
         it('cannot transition from ArrangingAdditionalPayment when total not covered by Payments', async () => {
             const transitionOrderToState = await adminTransitionOrderToState(orderId2, 'PaymentSettled');
             orderGuard.assertErrorResult(transitionOrderToState);
-            expect(transitionOrderToState!.errorCode).toBe(ErrorCode.ORDER_STATE_TRANSITION_ERROR);
-            expect(transitionOrderToState!.transitionError).toBe(
-                `Cannot transition away from "ArrangingAdditionalPayment" unless Order total is covered by Payments`,
+            expect(transitionOrderToState.errorCode).toBe(ErrorCode.ORDER_STATE_TRANSITION_ERROR);
+            expect((transitionOrderToState as any).transitionError).toBe(
+                'Cannot transition away from "ArrangingAdditionalPayment" unless Order total is covered by Payments',
             );
         });
 
         it('addManualPaymentToOrder', async () => {
-            const { addManualPaymentToOrder } = await adminClient.query<
-                AddManualPayment.Mutation,
-                AddManualPayment.Variables
-            >(ADD_MANUAL_PAYMENT, {
+            const { addManualPaymentToOrder } = await adminClient.query(addManualPaymentToOrderDocument, {
                 input: {
                     orderId: orderId2,
                     method: 'test',
@@ -1169,7 +1305,7 @@ describe('Order modification', () => {
                     },
                 },
             });
-            orderGuard.assertSuccess(addManualPaymentToOrder);
+            orderWithModificationsGuard.assertSuccess(addManualPaymentToOrder);
 
             expect(addManualPaymentToOrder.payments?.length).toBe(2);
             expect(omit(addManualPaymentToOrder.payments![1], ['id'])).toEqual({
@@ -1177,6 +1313,7 @@ describe('Order modification', () => {
                 state: 'Settled',
                 amount: 300,
                 method: 'test',
+                nextStates: ['Cancelled'],
                 metadata: {
                     foo: 'bar',
                 },
@@ -1206,38 +1343,32 @@ describe('Order modification', () => {
                     quantity: 1,
                 },
             ]);
-            const { modifyOrder } = await adminClient.query<ModifyOrder.Mutation, ModifyOrder.Variables>(
-                MODIFY_ORDER,
-                {
-                    input: {
-                        dryRun: false,
-                        orderId: order.id,
-                        surcharges: [
-                            {
-                                description: 'discount',
-                                sku: '123',
-                                price: -300,
-                                priceIncludesTax: true,
-                                taxRate: 20,
-                                taxDescription: 'VAT',
-                            },
-                        ],
-                        refund: {
-                            paymentId: order.payments![0].id,
-                            reason: 'discount',
+            const { modifyOrder } = await adminClient.query(modifyOrderDocument, {
+                input: {
+                    dryRun: false,
+                    orderId: order.id,
+                    surcharges: [
+                        {
+                            description: 'discount',
+                            sku: '123',
+                            price: -300,
+                            priceIncludesTax: true,
+                            taxRate: 20,
+                            taxDescription: 'VAT',
                         },
+                    ],
+                    refund: {
+                        paymentId: order.payments![0].id,
+                        reason: 'discount',
                     },
                 },
-            );
-            orderGuard.assertSuccess(modifyOrder);
+            });
+            orderWithModificationsGuard.assertSuccess(modifyOrder);
             orderId3 = modifyOrder.id;
         });
 
         it('modification is settled', async () => {
-            const { order } = await adminClient.query<
-                GetOrderWithModifications.Query,
-                GetOrderWithModifications.Variables
-            >(GET_ORDER_WITH_MODIFICATIONS, { id: orderId3 });
+            const { order } = await adminClient.query(getOrderWithModificationsDocument, { id: orderId3 });
 
             expect(order?.modifications.length).toBe(1);
             expect(order?.modifications[0].isSettled).toBe(true);
@@ -1249,36 +1380,38 @@ describe('Order modification', () => {
                 'ArrangingAdditionalPayment',
             );
             orderGuard.assertErrorResult(transitionOrderToState);
-            expect(transitionOrderToState!.errorCode).toBe(ErrorCode.ORDER_STATE_TRANSITION_ERROR);
-            expect(transitionOrderToState!.transitionError).toBe(
-                `Cannot transition Order to the \"ArrangingAdditionalPayment\" state as no additional payments are needed`,
+            expect(transitionOrderToState.errorCode).toBe(ErrorCode.ORDER_STATE_TRANSITION_ERROR);
+            expect((transitionOrderToState as any).transitionError).toBe(
+                'Cannot transition Order to the "ArrangingAdditionalPayment" state as no additional payments are needed',
             );
         });
 
         it('can transition to original state', async () => {
             const transitionOrderToState = await adminTransitionOrderToState(orderId3, 'PaymentSettled');
             orderGuard.assertSuccess(transitionOrderToState);
-            expect(transitionOrderToState!.state).toBe('PaymentSettled');
+            expect(transitionOrderToState.state).toBe('PaymentSettled');
 
-            const { order } = await adminClient.query<GetOrder.Query, GetOrder.Variables>(GET_ORDER, {
+            const { order } = await adminClient.query(getOrderDocument, {
                 id: orderId3,
             });
-            expect(order?.payments![0].refunds.length).toBe(1);
-            expect(order?.payments![0].refunds[0].total).toBe(300);
-            expect(order?.payments![0].refunds[0].reason).toBe('discount');
+            if (!order) {
+                throw new Error('Order not found');
+            }
+            expect(order.payments![0].refunds.length).toBe(1);
+            expect(order.payments![0].refunds[0].total).toBe(300);
+            expect(order.payments![0].refunds[0].reason).toBe('discount');
         });
     });
 
-    // https://github.com/vendure-ecommerce/vendure/issues/1753
+    // https://github.com/vendurehq/vendure/issues/1753
     describe('refunds for multiple payments', () => {
         let orderId2: string;
         let orderLineId: string;
         let additionalPaymentId: string;
 
         beforeAll(async () => {
-            await adminClient.query<CreatePromotion.Mutation, CreatePromotion.Variables>(CREATE_PROMOTION, {
+            await adminClient.query(createPromotionDocument, {
                 input: {
-                    name: '$5 off',
                     couponCode: '5OFF',
                     enabled: true,
                     conditions: [],
@@ -1288,10 +1421,11 @@ describe('Order modification', () => {
                             arguments: [{ name: 'discount', value: '500' }],
                         },
                     ],
+                    translations: [{ languageCode: LanguageCode.en, name: '$5 off' }],
                 },
             });
             await shopClient.asUserWithCredentials('trevor_donnelly96@hotmail.com', 'test');
-            await shopClient.query(gql(ADD_ITEM_TO_ORDER_WITH_CUSTOM_FIELDS), {
+            await shopClient.query(addItemToOrderWithCustomFieldsDocument, {
                 productVariantId: 'T_5',
                 quantity: 1,
             } as any);
@@ -1303,24 +1437,18 @@ describe('Order modification', () => {
 
             const transitionOrderToState = await adminTransitionOrderToState(orderId2, 'Modifying');
             orderGuard.assertSuccess(transitionOrderToState);
-            const { modifyOrder } = await adminClient.query<ModifyOrder.Mutation, ModifyOrder.Variables>(
-                MODIFY_ORDER,
-                {
-                    input: {
-                        dryRun: false,
-                        orderId: orderId2,
-                        adjustOrderLines: [{ orderLineId, quantity: 2 }],
-                    },
+            const { modifyOrder } = await adminClient.query(modifyOrderDocument, {
+                input: {
+                    dryRun: false,
+                    orderId: orderId2,
+                    adjustOrderLines: [{ orderLineId, quantity: 2 }],
                 },
-            );
-            orderGuard.assertSuccess(modifyOrder);
+            });
+            orderWithModificationsGuard.assertSuccess(modifyOrder);
 
             await adminTransitionOrderToState(orderId2, 'ArrangingAdditionalPayment');
 
-            const { addManualPaymentToOrder } = await adminClient.query<
-                AddManualPayment.Mutation,
-                AddManualPayment.Variables
-            >(ADD_MANUAL_PAYMENT, {
+            const { addManualPaymentToOrder } = await adminClient.query(addManualPaymentToOrderDocument, {
                 input: {
                     orderId: orderId2,
                     method: 'test',
@@ -1330,8 +1458,8 @@ describe('Order modification', () => {
                     },
                 },
             });
-            orderGuard.assertSuccess(addManualPaymentToOrder);
-            additionalPaymentId = addManualPaymentToOrder.payments?.[1].id!;
+            orderWithModificationsGuard.assertSuccess(addManualPaymentToOrder);
+            additionalPaymentId = addManualPaymentToOrder.payments![1].id!;
 
             const transitionOrderToState2 = await adminTransitionOrderToState(orderId2, 'PaymentSettled');
             orderGuard.assertSuccess(transitionOrderToState2);
@@ -1342,21 +1470,18 @@ describe('Order modification', () => {
         it('apply couponCode to create first refund', async () => {
             const transitionOrderToState = await adminTransitionOrderToState(orderId2, 'Modifying');
             orderGuard.assertSuccess(transitionOrderToState);
-            const { modifyOrder } = await adminClient.query<ModifyOrder.Mutation, ModifyOrder.Variables>(
-                MODIFY_ORDER,
-                {
-                    input: {
-                        dryRun: false,
-                        orderId: orderId2,
-                        couponCodes: ['5OFF'],
-                        refund: {
-                            paymentId: additionalPaymentId,
-                            reason: 'test',
-                        },
+            const { modifyOrder } = await adminClient.query(modifyOrderForTestDocument, {
+                input: {
+                    dryRun: false,
+                    orderId: orderId2,
+                    couponCodes: ['5OFF'],
+                    refund: {
+                        paymentId: additionalPaymentId,
+                        reason: 'test',
                     },
                 },
-            );
-            orderGuard.assertSuccess(modifyOrder);
+            });
+            orderWithModificationsGuard.assertSuccess(modifyOrder);
 
             expect(modifyOrder.payments?.length).toBe(2);
             expect(modifyOrder?.payments?.find(p => p.id === additionalPaymentId)?.refunds).toEqual([
@@ -1365,27 +1490,25 @@ describe('Order modification', () => {
                     paymentId: additionalPaymentId,
                     state: 'Pending',
                     total: 600,
+                    reason: 'test',
                 },
             ]);
             expect(modifyOrder.totalWithTax).toBe(getOrderPaymentsTotalWithRefunds(modifyOrder));
         });
 
         it('reduce quantity to create second refund', async () => {
-            const { modifyOrder } = await adminClient.query<ModifyOrder.Mutation, ModifyOrder.Variables>(
-                MODIFY_ORDER,
-                {
-                    input: {
-                        dryRun: false,
-                        orderId: orderId2,
-                        adjustOrderLines: [{ orderLineId, quantity: 1 }],
-                        refund: {
-                            paymentId: additionalPaymentId,
-                            reason: 'test 2',
-                        },
+            const { modifyOrder } = await adminClient.query(modifyOrderForTestDocument, {
+                input: {
+                    dryRun: false,
+                    orderId: orderId2,
+                    adjustOrderLines: [{ orderLineId, quantity: 1 }],
+                    refund: {
+                        paymentId: additionalPaymentId,
+                        reason: 'test 2',
                     },
                 },
-            );
-            orderGuard.assertSuccess(modifyOrder);
+            });
+            orderWithModificationsGuard.assertSuccess(modifyOrder);
 
             expect(
                 modifyOrder?.payments?.find(p => p.id === additionalPaymentId)?.refunds.sort(sortById),
@@ -1395,31 +1518,39 @@ describe('Order modification', () => {
                     paymentId: additionalPaymentId,
                     state: 'Pending',
                     total: 600,
+                    reason: 'test',
                 },
                 {
                     id: 'T_5',
                     paymentId: additionalPaymentId,
                     state: 'Pending',
                     total: 16649,
+                    reason: 'test 2',
                 },
             ]);
+            // Note: During the big refactor of the OrderItem entity, the "total" value in the following
+            // assertion was changed from `300` to `600`. This is due to a change in the way we calculate
+            // refunds on pro-rated discounts. Previously, the pro-ration was not recalculated prior to
+            // the refund being calculated, so the individual OrderItem had only 1/2 the full order discount
+            // applied to it (300). Now, the pro-ration is applied to the single remaining item and therefore the
+            // entire discount of 600 gets moved over to the remaining item.
             expect(modifyOrder?.payments?.find(p => p.id !== additionalPaymentId)?.refunds).toEqual([
                 {
                     id: 'T_6',
                     paymentId: 'T_15',
                     state: 'Pending',
-                    total: 300,
+                    total: 600,
+                    reason: 'test 2',
                 },
             ]);
             expect(modifyOrder.totalWithTax).toBe(getOrderPaymentsTotalWithRefunds(modifyOrder));
         });
     });
 
-    // https://github.com/vendure-ecommerce/vendure/issues/688 - 4th point
+    // https://github.com/vendurehq/vendure/issues/688 - 4th point
     it('correct additional payment when discounts applied', async () => {
-        await adminClient.query<CreatePromotion.Mutation, CreatePromotion.Variables>(CREATE_PROMOTION, {
+        await adminClient.query(createPromotionDocument, {
             input: {
-                name: '$5 off',
                 couponCode: '5OFF',
                 enabled: true,
                 conditions: [],
@@ -1429,15 +1560,16 @@ describe('Order modification', () => {
                         arguments: [{ name: 'discount', value: '500' }],
                     },
                 ],
+                translations: [{ languageCode: LanguageCode.en, name: '$5 off' }],
             },
         });
 
         await shopClient.asUserWithCredentials('trevor_donnelly96@hotmail.com', 'test');
-        await shopClient.query(gql(ADD_ITEM_TO_ORDER_WITH_CUSTOM_FIELDS), {
+        await shopClient.query(addItemToOrderWithCustomFieldsDocument, {
             productVariantId: 'T_1',
             quantity: 1,
         } as any);
-        await shopClient.query<ApplyCouponCode.Mutation, ApplyCouponCode.Variables>(APPLY_COUPON_CODE, {
+        await shopClient.query(applyCouponCodeDocument, {
             couponCode: '5OFF',
         });
         await proceedToArrangingPayment(shopClient);
@@ -1452,31 +1584,28 @@ describe('Order modification', () => {
 
         expect(transitionOrderToState.state).toBe('Modifying');
 
-        const { modifyOrder } = await adminClient.query<ModifyOrder.Mutation, ModifyOrder.Variables>(
-            MODIFY_ORDER,
-            {
-                input: {
-                    dryRun: false,
-                    orderId: order.id,
-                    surcharges: [
-                        {
-                            description: 'extra fee',
-                            sku: '123',
-                            price: surcharge,
-                            priceIncludesTax: true,
-                            taxRate: 20,
-                            taxDescription: 'VAT',
-                        },
-                    ],
-                },
+        const { modifyOrder } = await adminClient.query(modifyOrderDocument, {
+            input: {
+                dryRun: false,
+                orderId: order.id,
+                surcharges: [
+                    {
+                        description: 'extra fee',
+                        sku: '123',
+                        price: surcharge,
+                        priceIncludesTax: true,
+                        taxRate: 20,
+                        taxDescription: 'VAT',
+                    },
+                ],
             },
-        );
-        orderGuard.assertSuccess(modifyOrder);
+        });
+        orderWithModificationsGuard.assertSuccess(modifyOrder);
 
         expect(modifyOrder.totalWithTax).toBe(originalTotalWithTax + surcharge);
     });
 
-    // https://github.com/vendure-ecommerce/vendure/issues/872
+    // https://github.com/vendurehq/vendure/issues/872
     describe('correct price calculations when prices include tax', () => {
         async function modifyOrderLineQuantity(order: TestOrderWithPaymentsFragment) {
             const transitionOrderToState = await adminTransitionOrderToState(order.id, 'Modifying');
@@ -1484,22 +1613,19 @@ describe('Order modification', () => {
 
             expect(transitionOrderToState.state).toBe('Modifying');
 
-            const { modifyOrder } = await adminClient.query<ModifyOrder.Mutation, ModifyOrder.Variables>(
-                MODIFY_ORDER,
-                {
-                    input: {
-                        dryRun: true,
-                        orderId: order.id,
-                        adjustOrderLines: [{ orderLineId: order!.lines[0].id, quantity: 2 }],
-                    },
+            const { modifyOrder } = await adminClient.query(modifyOrderDocument, {
+                input: {
+                    dryRun: true,
+                    orderId: order.id,
+                    adjustOrderLines: [{ orderLineId: order.lines[0].id, quantity: 2 }],
                 },
-            );
-            orderGuard.assertSuccess(modifyOrder);
+            });
+            orderWithModificationsGuard.assertSuccess(modifyOrder);
             return modifyOrder;
         }
 
         beforeAll(async () => {
-            await adminClient.query<UpdateChannel.Mutation, UpdateChannel.Variables>(UPDATE_CHANNEL, {
+            await adminClient.query(updateChannelDocument, {
                 input: {
                     id: 'T_1',
                     pricesIncludeTax: true,
@@ -1509,7 +1635,7 @@ describe('Order modification', () => {
 
         it('without promotion', async () => {
             await shopClient.asUserWithCredentials('hayden.zieme12@hotmail.com', 'test');
-            await shopClient.query(gql(ADD_ITEM_TO_ORDER_WITH_CUSTOM_FIELDS), {
+            await shopClient.query(addItemToOrderWithCustomFieldsDocument, {
                 productVariantId: 'T_1',
                 quantity: 1,
             } as any);
@@ -1522,9 +1648,8 @@ describe('Order modification', () => {
         });
 
         it('with promotion', async () => {
-            await adminClient.query<CreatePromotion.Mutation, CreatePromotion.Variables>(CREATE_PROMOTION, {
+            await adminClient.query(createPromotionDocument, {
                 input: {
-                    name: 'half price',
                     couponCode: 'HALF',
                     enabled: true,
                     conditions: [],
@@ -1537,14 +1662,15 @@ describe('Order modification', () => {
                             ],
                         },
                     ],
+                    translations: [{ languageCode: LanguageCode.en, name: 'half price' }],
                 },
             });
             await shopClient.asUserWithCredentials('trevor_donnelly96@hotmail.com', 'test');
-            await shopClient.query(gql(ADD_ITEM_TO_ORDER_WITH_CUSTOM_FIELDS), {
+            await shopClient.query(addItemToOrderWithCustomFieldsDocument, {
                 productVariantId: 'T_1',
                 quantity: 1,
             } as any);
-            await shopClient.query<ApplyCouponCode.Mutation, ApplyCouponCode.Variables>(APPLY_COUPON_CODE, {
+            await shopClient.query(applyCouponCodeDocument, {
                 couponCode: 'HALF',
             });
             await proceedToArrangingPayment(shopClient);
@@ -1561,11 +1687,10 @@ describe('Order modification', () => {
     });
 
     describe('refund handling when promotions are active on order', () => {
-        // https://github.com/vendure-ecommerce/vendure/issues/890
+        // https://github.com/vendurehq/vendure/issues/890
         it('refunds correct amount when order-level promotion applied', async () => {
-            await adminClient.query<CreatePromotion.Mutation, CreatePromotion.Variables>(CREATE_PROMOTION, {
+            await adminClient.query(createPromotionDocument, {
                 input: {
-                    name: '$5 off',
                     couponCode: '5OFF2',
                     enabled: true,
                     conditions: [],
@@ -1575,15 +1700,16 @@ describe('Order modification', () => {
                             arguments: [{ name: 'discount', value: '500' }],
                         },
                     ],
+                    translations: [{ languageCode: LanguageCode.en, name: '$5 off' }],
                 },
             });
 
             await shopClient.asUserWithCredentials('trevor_donnelly96@hotmail.com', 'test');
-            await shopClient.query(gql(ADD_ITEM_TO_ORDER_WITH_CUSTOM_FIELDS), {
+            await shopClient.query(addItemToOrderWithCustomFieldsDocument, {
                 productVariantId: 'T_1',
                 quantity: 2,
             } as any);
-            await shopClient.query<ApplyCouponCode.Mutation, ApplyCouponCode.Variables>(APPLY_COUPON_CODE, {
+            await shopClient.query(applyCouponCodeDocument, {
                 couponCode: '5OFF2',
             });
             await proceedToArrangingPayment(shopClient);
@@ -1591,47 +1717,39 @@ describe('Order modification', () => {
             orderGuard.assertSuccess(order);
 
             const originalTotalWithTax = order.totalWithTax;
-
             const transitionOrderToState = await adminTransitionOrderToState(order.id, 'Modifying');
             orderGuard.assertSuccess(transitionOrderToState);
 
             expect(transitionOrderToState.state).toBe('Modifying');
 
-            const { modifyOrder } = await adminClient.query<ModifyOrder.Mutation, ModifyOrder.Variables>(
-                MODIFY_ORDER,
-                {
-                    input: {
-                        dryRun: false,
-                        orderId: order.id,
-                        adjustOrderLines: [{ orderLineId: order.lines[0].id, quantity: 1 }],
-                        refund: {
-                            paymentId: order.payments![0].id,
-                            reason: 'requested',
-                        },
+            const { modifyOrder } = await adminClient.query(modifyOrderDocument, {
+                input: {
+                    dryRun: false,
+                    orderId: order.id,
+                    adjustOrderLines: [{ orderLineId: order.lines[0].id, quantity: 1 }],
+                    refund: {
+                        paymentId: order.payments![0].id,
+                        reason: 'requested',
                     },
                 },
-            );
-            orderGuard.assertSuccess(modifyOrder);
+            });
+            orderWithModificationsGuard.assertSuccess(modifyOrder);
 
             expect(modifyOrder.totalWithTax).toBe(
                 originalTotalWithTax - order.lines[0].proratedUnitPriceWithTax,
             );
-            expect(modifyOrder.payments![0].refunds![0].total).toBe(order.lines[0].proratedUnitPriceWithTax);
+            expect(modifyOrder.payments![0].refunds[0].total).toBe(order.lines[0].proratedUnitPriceWithTax);
             expect(modifyOrder.totalWithTax).toBe(getOrderPaymentsTotalWithRefunds(modifyOrder));
         });
 
-        // github.com/vendure-ecommerce/vendure/issues/1865
+        // https://github.com/vendurehq/vendure/issues/1865
         describe('issue 1865', () => {
             const promoDiscount = 5000;
             let promoId: string;
             let orderId2: string;
             beforeAll(async () => {
-                const { createPromotion } = await adminClient.query<
-                    CreatePromotion.Mutation,
-                    CreatePromotion.Variables
-                >(CREATE_PROMOTION, {
+                const { createPromotion } = await adminClient.query(createPromotionDocument, {
                     input: {
-                        name: '50 off orders over 100',
                         enabled: true,
                         conditions: [
                             {
@@ -1648,25 +1766,20 @@ describe('Order modification', () => {
                                 arguments: [{ name: 'discount', value: JSON.stringify(promoDiscount) }],
                             },
                         ],
+                        translations: [{ languageCode: LanguageCode.en, name: '50 off orders over 100' }],
                     },
                 });
                 promoId = (createPromotion as any).id;
             });
 
             afterAll(async () => {
-                await adminClient.query<DeletePromotionMutation, DeletePromotionMutationVariables>(
-                    DELETE_PROMOTION,
-                    {
-                        id: promoId,
-                    },
-                );
+                await adminClient.query(deletePromotionDocument, {
+                    id: promoId,
+                });
             });
 
             it('refund handling when order-level promotion becomes invalid on modification', async () => {
-                const { productVariants } = await adminClient.query<
-                    GetProductVariantListQuery,
-                    GetProductVariantListQueryVariables
-                >(GET_PRODUCT_VARIANT_LIST, {
+                const { productVariants } = await adminClient.query(getProductVariantListDocument, {
                     options: {
                         filter: {
                             name: { contains: 'football' },
@@ -1675,7 +1788,7 @@ describe('Order modification', () => {
                 });
                 const football = productVariants.items[0];
 
-                await shopClient.query(gql(ADD_ITEM_TO_ORDER_WITH_CUSTOM_FIELDS), {
+                await shopClient.query(addItemToOrderWithCustomFieldsDocument, {
                     productVariantId: football.id,
                     quantity: 2,
                 } as any);
@@ -1697,55 +1810,50 @@ describe('Order modification', () => {
 
                 expect(transitionOrderToState.state).toBe('Modifying');
 
-                const { modifyOrder } = await adminClient.query<ModifyOrder.Mutation, ModifyOrder.Variables>(
-                    MODIFY_ORDER,
-                    {
-                        input: {
-                            dryRun: false,
-                            orderId: order.id,
-                            adjustOrderLines: [{ orderLineId: order.lines[0].id, quantity: 1 }],
-                            refund: {
-                                paymentId: order.payments![0].id,
-                                reason: 'requested',
-                            },
+                const { modifyOrder } = await adminClient.query(modifyOrderDocument, {
+                    input: {
+                        dryRun: false,
+                        orderId: order.id,
+                        adjustOrderLines: [{ orderLineId: order.lines[0].id, quantity: 1 }],
+                        refund: {
+                            paymentId: order.payments![0].id,
+                            reason: 'requested',
                         },
                     },
-                );
-                orderGuard.assertSuccess(modifyOrder);
+                });
+                orderWithModificationsGuard.assertSuccess(modifyOrder);
 
                 const expectedNewTotal = order.lines[0].unitPriceWithTax + shippingPrice;
                 expect(modifyOrder.totalWithTax).toBe(expectedNewTotal);
-                expect(modifyOrder.payments![0].refunds![0].total).toBe(expectedTotal - expectedNewTotal);
+                expect(modifyOrder.payments![0].refunds[0].total).toBe(expectedTotal - expectedNewTotal);
                 expect(modifyOrder.totalWithTax).toBe(getOrderPaymentsTotalWithRefunds(modifyOrder));
             });
 
             it('transition back to original state', async () => {
                 const transitionOrderToState2 = await adminTransitionOrderToState(orderId2, 'PaymentSettled');
                 orderGuard.assertSuccess(transitionOrderToState2);
-                expect(transitionOrderToState2!.state).toBe('PaymentSettled');
+                expect(transitionOrderToState2.state).toBe('PaymentSettled');
             });
 
             it('order no longer has promotions', async () => {
-                const { order } = await adminClient.query<
-                    GetOrderWithModificationsQuery,
-                    GetOrderWithModificationsQueryVariables
-                >(GET_ORDER_WITH_MODIFICATIONS, { id: orderId2 });
+                const { order } = await adminClient.query(getOrderWithModificationsDocument, {
+                    id: orderId2,
+                });
 
                 expect(order?.promotions).toEqual([]);
             });
 
             it('order no longer has discounts', async () => {
-                const { order } = await adminClient.query<
-                    GetOrderWithModificationsQuery,
-                    GetOrderWithModificationsQueryVariables
-                >(GET_ORDER_WITH_MODIFICATIONS, { id: orderId2 });
+                const { order } = await adminClient.query(getOrderWithModificationsDocument, {
+                    id: orderId2,
+                });
 
                 expect(order?.discounts).toEqual([]);
             });
         });
     });
 
-    // https://github.com/vendure-ecommerce/vendure/issues/1197
+    // https://github.com/vendurehq/vendure/issues/1197
     describe('refund on shipping when change made to shippingAddress', () => {
         let order: OrderWithModificationsFragment;
         beforeAll(async () => {
@@ -1755,27 +1863,24 @@ describe('Order modification', () => {
                     quantity: 1,
                 },
             ]);
-            const { modifyOrder } = await adminClient.query<ModifyOrder.Mutation, ModifyOrder.Variables>(
-                MODIFY_ORDER,
-                {
-                    input: {
-                        dryRun: false,
-                        orderId: createdOrder.id,
-                        updateShippingAddress: {
-                            countryCode: 'GB',
-                        },
-                        refund: {
-                            paymentId: createdOrder.payments![0].id,
-                            reason: 'discount',
-                        },
+            const { modifyOrder } = await adminClient.query(modifyOrderDocument, {
+                input: {
+                    dryRun: false,
+                    orderId: createdOrder.id,
+                    updateShippingAddress: {
+                        countryCode: 'GB',
+                    },
+                    refund: {
+                        paymentId: createdOrder.payments![0].id,
+                        reason: 'discount',
                     },
                 },
-            );
-            orderGuard.assertSuccess(modifyOrder);
+            });
+            orderWithModificationsGuard.assertSuccess(modifyOrder);
             order = modifyOrder;
         });
 
-        it('creates a Refund with the correct amount', async () => {
+        it('creates a Refund with the correct amount', () => {
             expect(order.payments?.[0].refunds[0].total).toBe(SHIPPING_OTHER - SHIPPING_GB);
         });
 
@@ -1788,16 +1893,13 @@ describe('Order modification', () => {
         });
     });
 
-    // https://github.com/vendure-ecommerce/vendure/issues/1210
+    // https://github.com/vendurehq/vendure/issues/1210
     describe('updating stock levels', () => {
         async function getVariant(id: 'T_1' | 'T_2' | 'T_3') {
-            const { product } = await adminClient.query<GetStockMovement.Query, GetStockMovement.Variables>(
-                GET_STOCK_MOVEMENT,
-                {
-                    id: 'T_1',
-                },
-            );
-            return product?.variants.find(v => v.id === id)!;
+            const { product } = await adminClient.query(getStockMovementDocument, {
+                id: 'T_1',
+            });
+            return product!.variants.find(v => v.id === id)!;
         }
 
         let orderId4: string;
@@ -1820,17 +1922,14 @@ describe('Order modification', () => {
             expect(variant2.stockOnHand).toBe(100);
             expect(variant2.stockAllocated).toBe(1);
 
-            const { modifyOrder } = await adminClient.query<ModifyOrder.Mutation, ModifyOrder.Variables>(
-                MODIFY_ORDER,
-                {
-                    input: {
-                        dryRun: false,
-                        orderId: order.id,
-                        adjustOrderLines: [{ orderLineId: order.lines[0].id, quantity: 2 }],
-                    },
+            const { modifyOrder } = await adminClient.query(modifyOrderDocument, {
+                input: {
+                    dryRun: false,
+                    orderId: order.id,
+                    adjustOrderLines: [{ orderLineId: order.lines[0].id, quantity: 2 }],
                 },
-            );
-            orderGuard.assertSuccess(modifyOrder);
+            });
+            orderWithModificationsGuard.assertSuccess(modifyOrder);
 
             const variant3 = await getVariant('T_2');
             expect(variant3.stockOnHand).toBe(100);
@@ -1840,14 +1939,11 @@ describe('Order modification', () => {
         it('updates stock when increasing quantity after fulfillment', async () => {
             const result = await adminTransitionOrderToState(orderId4, 'ArrangingAdditionalPayment');
             orderGuard.assertSuccess(result);
-            expect(result!.state).toBe('ArrangingAdditionalPayment');
-            const { order } = await adminClient.query<GetOrder.Query, GetOrder.Variables>(GET_ORDER, {
+            expect(result.state).toBe('ArrangingAdditionalPayment');
+            const { order } = await adminClient.query(getOrderDocument, {
                 id: orderId4,
             });
-            const { addManualPaymentToOrder } = await adminClient.query<
-                AddManualPayment.Mutation,
-                AddManualPayment.Variables
-            >(ADD_MANUAL_PAYMENT, {
+            const { addManualPaymentToOrder } = await adminClient.query(addManualPaymentToOrderDocument, {
                 input: {
                     orderId: orderId4,
                     method: 'test',
@@ -1857,46 +1953,40 @@ describe('Order modification', () => {
                     },
                 },
             });
-            orderGuard.assertSuccess(addManualPaymentToOrder);
+            orderWithModificationsGuard.assertSuccess(addManualPaymentToOrder);
             await adminTransitionOrderToState(orderId4, 'PaymentSettled');
-            await adminClient.query<CreateFulfillment.Mutation, CreateFulfillment.Variables>(
-                CREATE_FULFILLMENT,
-                {
-                    input: {
-                        lines: order?.lines.map(l => ({ orderLineId: l.id, quantity: l.quantity })) ?? [],
-                        handler: {
-                            code: manualFulfillmentHandler.code,
-                            arguments: [
-                                { name: 'method', value: 'test method' },
-                                { name: 'trackingCode', value: 'ABC123' },
-                            ],
-                        },
+            await adminClient.query(createFulfillmentDocument, {
+                input: {
+                    lines: order?.lines.map(l => ({ orderLineId: l.id, quantity: l.quantity })) ?? [],
+                    handler: {
+                        code: manualFulfillmentHandler.code,
+                        arguments: [
+                            { name: 'method', value: 'test method' },
+                            { name: 'trackingCode', value: 'ABC123' },
+                        ],
                     },
                 },
-            );
+            });
 
             const variant1 = await getVariant('T_2');
             expect(variant1.stockOnHand).toBe(98);
             expect(variant1.stockAllocated).toBe(0);
 
             await adminTransitionOrderToState(orderId4, 'Modifying');
-            const { modifyOrder } = await adminClient.query<ModifyOrder.Mutation, ModifyOrder.Variables>(
-                MODIFY_ORDER,
-                {
-                    input: {
-                        dryRun: false,
-                        orderId: order!.id,
-                        adjustOrderLines: [{ orderLineId: order!.lines[0].id, quantity: 3 }],
-                    },
+            const { modifyOrder } = await adminClient.query(modifyOrderDocument, {
+                input: {
+                    dryRun: false,
+                    orderId: order!.id,
+                    adjustOrderLines: [{ orderLineId: order!.lines[0].id, quantity: 3 }],
                 },
-            );
-            orderGuard.assertSuccess(modifyOrder);
+            });
+            orderWithModificationsGuard.assertSuccess(modifyOrder);
 
             const variant2 = await getVariant('T_2');
             expect(variant2.stockOnHand).toBe(98);
             expect(variant2.stockAllocated).toBe(1);
 
-            const { order: order2 } = await adminClient.query<GetOrder.Query, GetOrder.Variables>(GET_ORDER, {
+            const { order: order2 } = await adminClient.query(getOrderDocument, {
                 id: orderId4,
             });
         });
@@ -1914,17 +2004,14 @@ describe('Order modification', () => {
             ]);
             orderId5 = order.id;
 
-            const { modifyOrder } = await adminClient.query<ModifyOrder.Mutation, ModifyOrder.Variables>(
-                MODIFY_ORDER,
-                {
-                    input: {
-                        dryRun: false,
-                        orderId: order!.id,
-                        addItems: [{ productVariantId: 'T_3', quantity: 1 }],
-                    },
+            const { modifyOrder } = await adminClient.query(modifyOrderDocument, {
+                input: {
+                    dryRun: false,
+                    orderId: order.id,
+                    addItems: [{ productVariantId: 'T_3', quantity: 1 }],
                 },
-            );
-            orderGuard.assertSuccess(modifyOrder);
+            });
+            orderWithModificationsGuard.assertSuccess(modifyOrder);
 
             const variant2 = await getVariant('T_3');
             expect(variant2.stockOnHand).toBe(100);
@@ -1932,11 +2019,8 @@ describe('Order modification', () => {
 
             const result = await adminTransitionOrderToState(orderId5, 'ArrangingAdditionalPayment');
             orderGuard.assertSuccess(result);
-            expect(result!.state).toBe('ArrangingAdditionalPayment');
-            const { addManualPaymentToOrder } = await adminClient.query<
-                AddManualPayment.Mutation,
-                AddManualPayment.Variables
-            >(ADD_MANUAL_PAYMENT, {
+            expect(result.state).toBe('ArrangingAdditionalPayment');
+            const { addManualPaymentToOrder } = await adminClient.query(addManualPaymentToOrderDocument, {
                 input: {
                     orderId: orderId5,
                     method: 'test',
@@ -1946,7 +2030,7 @@ describe('Order modification', () => {
                     },
                 },
             });
-            orderGuard.assertSuccess(addManualPaymentToOrder);
+            orderWithModificationsGuard.assertSuccess(addManualPaymentToOrder);
             const result2 = await adminTransitionOrderToState(orderId5, 'PaymentSettled');
             orderGuard.assertSuccess(result2);
             const result3 = await adminTransitionOrderToState(orderId5, 'Modifying');
@@ -1958,29 +2042,26 @@ describe('Order modification', () => {
             expect(variant1.stockOnHand).toBe(100);
             expect(variant1.stockAllocated).toBe(1);
 
-            const { order } = await adminClient.query<GetOrder.Query, GetOrder.Variables>(GET_ORDER, {
+            const { order } = await adminClient.query(getOrderDocument, {
                 id: orderId5,
             });
 
-            const { modifyOrder } = await adminClient.query<ModifyOrder.Mutation, ModifyOrder.Variables>(
-                MODIFY_ORDER,
-                {
-                    input: {
-                        dryRun: false,
-                        orderId: orderId5,
-                        adjustOrderLines: [
-                            {
-                                orderLineId: order!.lines.find(l => l.productVariant.id === 'T_3')!.id,
-                                quantity: 0,
-                            },
-                        ],
-                        refund: {
-                            paymentId: order!.payments![0].id,
+            const { modifyOrder } = await adminClient.query(modifyOrderDocument, {
+                input: {
+                    dryRun: false,
+                    orderId: orderId5,
+                    adjustOrderLines: [
+                        {
+                            orderLineId: order!.lines.find(l => l.productVariant.id === 'T_3')!.id,
+                            quantity: 0,
                         },
+                    ],
+                    refund: {
+                        paymentId: order!.payments![0].id,
                     },
                 },
-            );
-            orderGuard.assertSuccess(modifyOrder);
+            });
+            orderWithModificationsGuard.assertSuccess(modifyOrder);
 
             const variant2 = await getVariant('T_3');
             expect(variant2.stockOnHand).toBe(100);
@@ -1998,10 +2079,7 @@ describe('Order modification', () => {
                     quantity: 1,
                 },
             ]);
-            const { addFulfillmentToOrder } = await adminClient.query<
-                CreateFulfillment.Mutation,
-                CreateFulfillment.Variables
-            >(CREATE_FULFILLMENT, {
+            const { addFulfillmentToOrder } = await adminClient.query(createFulfillmentDocument, {
                 input: {
                     lines: order?.lines.map(l => ({ orderLineId: l.id, quantity: l.quantity })) ?? [],
                     handler: {
@@ -2020,24 +2098,21 @@ describe('Order modification', () => {
             expect(variant2.stockAllocated).toBe(0);
 
             await adminTransitionOrderToState(order.id, 'Modifying');
-            const { modifyOrder } = await adminClient.query<ModifyOrder.Mutation, ModifyOrder.Variables>(
-                MODIFY_ORDER,
-                {
-                    input: {
-                        dryRun: false,
-                        orderId: order.id,
-                        adjustOrderLines: [
-                            {
-                                orderLineId: order!.lines.find(l => l.productVariant.id === 'T_3')!.id,
-                                quantity: 0,
-                            },
-                        ],
-                        refund: {
-                            paymentId: order!.payments![0].id,
+            const { modifyOrder } = await adminClient.query(modifyOrderDocument, {
+                input: {
+                    dryRun: false,
+                    orderId: order.id,
+                    adjustOrderLines: [
+                        {
+                            orderLineId: order.lines.find(l => l.productVariant.id === 'T_3')!.id,
+                            quantity: 0,
                         },
+                    ],
+                    refund: {
+                        paymentId: order.payments![0].id,
                     },
                 },
-            );
+            });
 
             const variant3 = await getVariant('T_3');
             expect(variant3.stockOnHand).toBe(100);
@@ -2050,46 +2125,40 @@ describe('Order modification', () => {
         const CODE_FREE_SHIPPING = 'FREESHIP';
         let order: TestOrderWithPaymentsFragment;
         beforeAll(async () => {
-            await adminClient.query<CreatePromotionMutation, CreatePromotionMutationVariables>(
-                CREATE_PROMOTION,
-                {
-                    input: {
-                        name: '50% off',
-                        couponCode: CODE_50PC_OFF,
-                        enabled: true,
-                        conditions: [],
-                        actions: [
-                            {
-                                code: orderPercentageDiscount.code,
-                                arguments: [{ name: 'discount', value: '50' }],
-                            },
-                        ],
-                    },
+            await adminClient.query(createPromotionDocument, {
+                input: {
+                    couponCode: CODE_50PC_OFF,
+                    enabled: true,
+                    conditions: [],
+                    actions: [
+                        {
+                            code: orderPercentageDiscount.code,
+                            arguments: [{ name: 'discount', value: '50' }],
+                        },
+                    ],
+                    translations: [{ languageCode: LanguageCode.en, name: '50% off' }],
                 },
-            );
-            await adminClient.query<CreatePromotionMutation, CreatePromotionMutationVariables>(
-                CREATE_PROMOTION,
-                {
-                    input: {
-                        name: 'Free shipping',
-                        couponCode: CODE_FREE_SHIPPING,
-                        enabled: true,
-                        conditions: [],
-                        actions: [{ code: freeShipping.code, arguments: [] }],
-                    },
+            });
+            await adminClient.query(createPromotionDocument, {
+                input: {
+                    couponCode: CODE_FREE_SHIPPING,
+                    enabled: true,
+                    conditions: [],
+                    actions: [{ code: freeShipping.code, arguments: [] }],
+                    translations: [{ languageCode: LanguageCode.en, name: 'Free shipping' }],
                 },
-            );
+            });
 
             // create an order and check out
             await shopClient.asUserWithCredentials('trevor_donnelly96@hotmail.com', 'test');
-            await shopClient.query(gql(ADD_ITEM_TO_ORDER_WITH_CUSTOM_FIELDS), {
+            await shopClient.query(addItemToOrderWithCustomFieldsDocument, {
                 productVariantId: 'T_1',
                 quantity: 1,
                 customFields: {
                     color: 'green',
                 },
             } as any);
-            await shopClient.query(gql(ADD_ITEM_TO_ORDER_WITH_CUSTOM_FIELDS), {
+            await shopClient.query(addItemToOrderWithCustomFieldsDocument, {
                 productVariantId: 'T_4',
                 quantity: 2,
             });
@@ -2103,25 +2172,19 @@ describe('Order modification', () => {
         });
 
         it('invalid coupon code returns ErrorResult', async () => {
-            const { modifyOrder } = await adminClient.query<
-                ModifyOrderMutation,
-                ModifyOrderMutationVariables
-            >(MODIFY_ORDER, {
+            const { modifyOrder } = await adminClient.query(modifyOrderDocument, {
                 input: {
                     dryRun: false,
                     orderId: order.id,
                     couponCodes: ['BAD_CODE'],
                 },
             });
-            orderGuard.assertErrorResult(modifyOrder);
+            orderWithModificationsGuard.assertErrorResult(modifyOrder);
             expect(modifyOrder.message).toBe('Coupon code "BAD_CODE" is not valid');
         });
 
         it('valid coupon code applies Promotion', async () => {
-            const { modifyOrder } = await adminClient.query<
-                ModifyOrderMutation,
-                ModifyOrderMutationVariables
-            >(MODIFY_ORDER, {
+            const { modifyOrder } = await adminClient.query(modifyOrderDocument, {
                 input: {
                     dryRun: false,
                     orderId: order.id,
@@ -2131,50 +2194,53 @@ describe('Order modification', () => {
                     couponCodes: [CODE_50PC_OFF],
                 },
             });
-            orderGuard.assertSuccess(modifyOrder);
+            orderWithModificationsGuard.assertSuccess(modifyOrder);
             expect(modifyOrder.subTotalWithTax).toBe(order.subTotalWithTax * 0.5);
         });
 
         it('adds order.discounts', async () => {
-            const { order: orderWithModifications } = await adminClient.query<
-                GetOrderWithModificationsQuery,
-                GetOrderWithModificationsQueryVariables
-            >(GET_ORDER_WITH_MODIFICATIONS, { id: order.id });
+            const { order: orderWithModifications } = await adminClient.query(
+                getOrderWithModificationsDocument,
+                { id: order.id },
+            );
             expect(orderWithModifications?.discounts.length).toBe(1);
             expect(orderWithModifications?.discounts[0].description).toBe('50% off');
         });
 
         it('adds order.promotions', async () => {
-            const { order: orderWithModifications } = await adminClient.query<
-                GetOrderWithModificationsQuery,
-                GetOrderWithModificationsQueryVariables
-            >(GET_ORDER_WITH_MODIFICATIONS, { id: order.id });
+            const { order: orderWithModifications } = await adminClient.query(
+                getOrderWithModificationsDocument,
+                { id: order.id },
+            );
             expect(orderWithModifications?.promotions.length).toBe(1);
             expect(orderWithModifications?.promotions[0].name).toBe('50% off');
         });
 
         it('creates correct refund amount', async () => {
-            const { order: orderWithModifications } = await adminClient.query<
-                GetOrderWithModificationsQuery,
-                GetOrderWithModificationsQueryVariables
-            >(GET_ORDER_WITH_MODIFICATIONS, { id: order.id });
-            expect(orderWithModifications?.payments![0].refunds.length).toBe(1);
-            expect(orderWithModifications!.totalWithTax).toBe(
-                getOrderPaymentsTotalWithRefunds(orderWithModifications!),
+            const { order: orderWithModifications } = await adminClient.query(
+                getOrderWithModificationsDocument,
+                { id: order.id },
             );
-            expect(orderWithModifications?.payments![0].refunds[0].total).toBe(
-                order.totalWithTax - orderWithModifications!.totalWithTax,
+            if (!orderWithModifications) {
+                throw new Error('Order with modifications not found');
+            }
+            expect(orderWithModifications.payments![0].refunds.length).toBe(1);
+            expect(orderWithModifications.totalWithTax).toBe(
+                getOrderPaymentsTotalWithRefunds(orderWithModifications),
+            );
+            expect(orderWithModifications.payments![0].refunds[0].total).toBe(
+                order.totalWithTax - orderWithModifications.totalWithTax,
             );
         });
 
         it('creates history entry for applying couponCode', async () => {
-            const { order: history } = await adminClient.query<
-                GetOrderHistory.Query,
-                GetOrderHistory.Variables
-            >(GET_ORDER_HISTORY, {
+            const { order: history } = await adminClient.query(getOrderHistoryDocument, {
                 id: order.id,
                 options: { filter: { type: { eq: HistoryEntryType.ORDER_COUPON_APPLIED } } },
             });
+            if (!history) {
+                throw new Error('History not found');
+            }
             orderGuard.assertSuccess(history);
 
             expect(history.history.items.length).toBe(1);
@@ -2185,44 +2251,42 @@ describe('Order modification', () => {
         });
 
         it('removes coupon code', async () => {
-            const { modifyOrder } = await adminClient.query<
-                ModifyOrderMutation,
-                ModifyOrderMutationVariables
-            >(MODIFY_ORDER, {
+            const { modifyOrder } = await adminClient.query(modifyOrderDocument, {
                 input: {
                     dryRun: false,
                     orderId: order.id,
                     couponCodes: [],
                 },
             });
-            orderGuard.assertSuccess(modifyOrder);
+            orderWithModificationsGuard.assertSuccess(modifyOrder);
             expect(modifyOrder.subTotalWithTax).toBe(order.subTotalWithTax);
         });
 
         it('removes order.discounts', async () => {
-            const { order: orderWithModifications } = await adminClient.query<
-                GetOrderWithModificationsQuery,
-                GetOrderWithModificationsQueryVariables
-            >(GET_ORDER_WITH_MODIFICATIONS, { id: order.id });
+            const { order: orderWithModifications } = await adminClient.query(
+                getOrderWithModificationsDocument,
+                { id: order.id },
+            );
             expect(orderWithModifications?.discounts.length).toBe(0);
         });
 
         it('removes order.promotions', async () => {
-            const { order: orderWithModifications } = await adminClient.query<
-                GetOrderWithModificationsQuery,
-                GetOrderWithModificationsQueryVariables
-            >(GET_ORDER_WITH_MODIFICATIONS, { id: order.id });
+            const { order: orderWithModifications } = await adminClient.query(
+                getOrderWithModificationsDocument,
+                { id: order.id },
+            );
             expect(orderWithModifications?.promotions.length).toBe(0);
         });
 
         it('creates history entry for removing couponCode', async () => {
-            const { order: history } = await adminClient.query<
-                GetOrderHistory.Query,
-                GetOrderHistory.Variables
-            >(GET_ORDER_HISTORY, {
+            const { order: history } = await adminClient.query(getOrderHistoryDocument, {
                 id: order.id,
                 options: { filter: { type: { eq: HistoryEntryType.ORDER_COUPON_REMOVED } } },
             });
+
+            if (!history) {
+                throw new Error('History not found');
+            }
             orderGuard.assertSuccess(history);
 
             expect(history.history.items.length).toBe(1);
@@ -2233,23 +2297,20 @@ describe('Order modification', () => {
         });
 
         it('correct refund for free shipping couponCode', async () => {
-            await shopClient.query(gql(ADD_ITEM_TO_ORDER_WITH_CUSTOM_FIELDS), {
+            await shopClient.query(addItemToOrderWithCustomFieldsDocument, {
                 productVariantId: 'T_1',
                 quantity: 1,
             } as any);
             await proceedToArrangingPayment(shopClient);
             const result = await addPaymentToOrder(shopClient, testSuccessfulPaymentMethod);
-            orderGuard.assertSuccess(result);
+            orderWithModificationsGuard.assertSuccess(result);
             const order2 = result;
             const shippingWithTax = order2.shippingWithTax;
             const result2 = await adminTransitionOrderToState(order2.id, 'Modifying');
             orderGuard.assertSuccess(result2);
             expect(result2.state).toBe('Modifying');
 
-            const { modifyOrder } = await adminClient.query<
-                ModifyOrderMutation,
-                ModifyOrderMutationVariables
-            >(MODIFY_ORDER, {
+            const { modifyOrder } = await adminClient.query(modifyOrderDocument, {
                 input: {
                     dryRun: false,
                     orderId: order2.id,
@@ -2259,60 +2320,199 @@ describe('Order modification', () => {
                     couponCodes: [CODE_FREE_SHIPPING],
                 },
             });
-            orderGuard.assertSuccess(modifyOrder);
+            orderWithModificationsGuard.assertSuccess(modifyOrder);
             expect(modifyOrder.shippingWithTax).toBe(0);
-            expect(modifyOrder!.totalWithTax).toBe(getOrderPaymentsTotalWithRefunds(modifyOrder!));
+            expect(modifyOrder.totalWithTax).toBe(getOrderPaymentsTotalWithRefunds(modifyOrder));
             expect(modifyOrder.payments![0].refunds[0].total).toBe(shippingWithTax);
+        });
+
+        it('adjustOrderLines empty quantity with discounts', async () => {
+            const PercentDiscount50Percent = '50PERCENT';
+            await adminClient.query(createPromotionDocument, {
+                input: {
+                    enabled: true,
+                    couponCode: PercentDiscount50Percent,
+                    conditions: [
+                        {
+                            code: 'minimum_order_amount',
+                            arguments: [
+                                { name: 'amount', value: '0' },
+                                { name: 'taxInclusive', value: 'false' },
+                            ],
+                        },
+                    ],
+                    actions: [
+                        {
+                            code: orderPercentageDiscount.code,
+                            arguments: [{ name: 'discount', value: '50' }],
+                        },
+                    ],
+                    translations: [{ languageCode: LanguageCode.en, name: 'half price' }],
+                },
+            });
+            await shopClient.asUserWithCredentials('trevor_donnelly96@hotmail.com', 'test');
+            await shopClient.query(addItemToOrderWithCustomFieldsDocument, {
+                productVariantId: 'T_1',
+                quantity: 1,
+            } as any);
+            await shopClient.query(addItemToOrderWithCustomFieldsDocument, {
+                productVariantId: 'T_2',
+                quantity: 1,
+            } as any);
+
+            await proceedToArrangingPayment(shopClient);
+            const paidOrder = await addPaymentToOrder(shopClient, testSuccessfulPaymentMethod);
+            orderGuard.assertSuccess(paidOrder);
+
+            const transitionOrderToState = await adminTransitionOrderToState(paidOrder.id, 'Modifying');
+            orderGuard.assertSuccess(transitionOrderToState);
+
+            expect(transitionOrderToState.state).toBe('Modifying');
+
+            // modify order should not throw an error when setting quantity to 0 for a order line
+            const { modifyOrder } = await adminClient.query(modifyOrderDocument, {
+                input: {
+                    dryRun: true,
+                    orderId: order.id,
+                    couponCodes: [PercentDiscount50Percent],
+                    adjustOrderLines: [{ orderLineId: order.lines[0].id, quantity: 0 }],
+                },
+            });
+
+            orderWithModificationsGuard.assertSuccess(modifyOrder);
+            expect(modifyOrder.id).toBeDefined();
+
+            // ensure correct adjustments applied
+            // The first line should have a linePrice of 0 because it has zero quantity
+            expect(modifyOrder.lines[0].linePriceWithTax).toBe(0);
+            expect(modifyOrder.lines[0].proratedLinePriceWithTax).toBe(0);
+            // The second line should have the proratedLinePriceWithTax discounted per the promotion
+            expect(modifyOrder.lines[1].proratedLinePriceWithTax).toBe(
+                modifyOrder.lines[1].discountedLinePriceWithTax / 2,
+            );
+        });
+    });
+
+    describe('payment handling with multiple modifications  ', () => {
+        let orderId3: string;
+
+        it('should handle manual payment after multiple modifications', async () => {
+            // 1. Create an order
+            const order = await createOrderAndTransitionToModifyingState([
+                {
+                    productVariantId: 'T_1',
+                    quantity: 1,
+                },
+            ]);
+
+            // 2. First modification - add an item
+            const { modifyOrder: firstModification } = await adminClient.query(modifyOrderDocument, {
+                input: {
+                    dryRun: false,
+                    orderId: order.id,
+                    addItems: [{ productVariantId: 'T_2', quantity: 1 }],
+                },
+            });
+            orderGuard.assertSuccess(firstModification);
+
+            // 3. Second modification - add another item
+            const { modifyOrder: secondModification } = await adminClient.query(modifyOrderDocument, {
+                input: {
+                    dryRun: false,
+                    orderId: order.id,
+                    addItems: [{ productVariantId: 'T_3', quantity: 1 }],
+                },
+            });
+            orderGuard.assertSuccess(secondModification);
+
+            // 4. Transition to ArrangingAdditionalPayment state
+            const transitionResult = await adminTransitionOrderToState(
+                order.id,
+                'ArrangingAdditionalPayment',
+            );
+            orderGuard.assertSuccess(transitionResult);
+            expect(transitionResult.state).toBe('ArrangingAdditionalPayment');
+
+            // 5. Add manual payment - this should currently fail due to a bug
+            const { addManualPaymentToOrder } = await adminClient.query(addManualPaymentToOrderDocument, {
+                input: {
+                    orderId: order.id,
+                    method: 'test',
+                    transactionId: 'MULTI_MOD_123',
+                    metadata: {
+                        test: 'multiple modifications',
+                    },
+                },
+            });
+
+            // This should fail due to the bug, but we expect it to succeed after the fix
+            orderWithModificationsGuard.assertSuccess(addManualPaymentToOrder);
+
+            // Verify the payment was added correctly
+            expect(addManualPaymentToOrder.payments?.length).toBe(2);
+            const manualPayment = addManualPaymentToOrder.payments?.find(
+                p => p.transactionId === 'MULTI_MOD_123',
+            );
+            expect(manualPayment).toEqual({
+                id: expect.any(String),
+                transactionId: 'MULTI_MOD_123',
+                state: 'Settled',
+                amount: expect.any(Number),
+                method: 'test',
+                nextStates: ['Cancelled'],
+                metadata: {
+                    test: 'multiple modifications',
+                },
+                refunds: [],
+            });
+            orderWithModificationsGuard.assertSuccess(addManualPaymentToOrder);
+
+            // Verify the modifications are properly settled
+            expect(addManualPaymentToOrder.modifications.length).toBe(2);
+            expect(addManualPaymentToOrder.modifications[0].isSettled).toBe(true);
+            expect(addManualPaymentToOrder.modifications[1].isSettled).toBe(true);
         });
     });
 
     async function adminTransitionOrderToState(id: string, state: string) {
-        const result = await adminClient.query<AdminTransition.Mutation, AdminTransition.Variables>(
-            ADMIN_TRANSITION_TO_STATE,
-            {
-                id,
-                state,
-            },
-        );
-        return result.transitionOrderToState;
+        const result = await adminClient.query(adminTransitionToStateDocument, {
+            id,
+            state,
+        });
+        return result.transitionOrderToState as OrderFragment | ErrorResult;
     }
 
     async function assertOrderIsUnchanged(order: OrderWithLinesFragment) {
-        const { order: order2 } = await adminClient.query<GetOrder.Query, GetOrder.Variables>(GET_ORDER, {
+        const { order: order2 } = await adminClient.query(getOrderDocument, {
             id: order.id,
         });
-        expect(order2!.totalWithTax).toBe(order!.totalWithTax);
-        expect(order2!.lines.length).toBe(order!.lines.length);
-        expect(order2!.surcharges.length).toBe(order!.surcharges.length);
-        expect(order2!.totalQuantity).toBe(order!.totalQuantity);
+        expect(order2!.totalWithTax).toBe(order.totalWithTax);
+        expect(order2!.lines.length).toBe(order.lines.length);
+        expect(order2!.surcharges.length).toBe(order.surcharges.length);
+        expect(order2!.totalQuantity).toBe(order.totalQuantity);
     }
 
-    async function createOrderAndCheckout(
-        items: Array<AddItemToOrderMutationVariables & { customFields?: any }>,
-    ) {
+    async function createOrderAndCheckout(items: AddItemInput[]) {
         await shopClient.asUserWithCredentials('hayden.zieme12@hotmail.com', 'test');
         for (const itemInput of items) {
-            await shopClient.query(gql(ADD_ITEM_TO_ORDER_WITH_CUSTOM_FIELDS), itemInput);
+            await shopClient.query(addItemToOrderWithCustomFieldsDocument, itemInput);
         }
 
-        await shopClient.query<SetShippingAddress.Mutation, SetShippingAddress.Variables>(
-            SET_SHIPPING_ADDRESS,
-            {
-                input: {
-                    fullName: 'name',
-                    streetLine1: '12 the street',
-                    city: 'foo',
-                    postalCode: '123456',
-                    countryCode: 'AT',
-                },
+        await shopClient.query(setShippingAddressDocument, {
+            input: {
+                fullName: 'name',
+                streetLine1: '12 the street',
+                city: 'foo',
+                postalCode: '123456',
+                countryCode: 'AT',
             },
-        );
-
-        await shopClient.query<SetShippingMethod.Mutation, SetShippingMethod.Variables>(SET_SHIPPING_METHOD, {
-            id: testShippingMethodId,
         });
 
-        await shopClient.query<TransitionToState.Mutation, TransitionToState.Variables>(TRANSITION_TO_STATE, {
+        await shopClient.query(setShippingMethodDocument, {
+            id: [testShippingMethodId],
+        });
+
+        await shopClient.query(transitionToStateDocument, {
             state: 'ArrangingPayment',
         });
 
@@ -2322,7 +2522,7 @@ describe('Order modification', () => {
     }
 
     async function createOrderAndTransitionToModifyingState(
-        items: Array<AddItemToOrderMutationVariables & { customFields?: any }>,
+        items: AddItemInput[],
     ): Promise<TestOrderWithPaymentsFragment> {
         const order = await createOrderAndCheckout(items);
         await adminTransitionOrderToState(order.id, 'Modifying');
@@ -2333,165 +2533,3 @@ describe('Order modification', () => {
         return _order.payments?.reduce((sum, p) => sum + p.amount - summate(p?.refunds, 'total'), 0) ?? 0;
     }
 });
-
-export const ORDER_WITH_MODIFICATION_FRAGMENT = gql`
-    fragment OrderWithModifications on Order {
-        id
-        state
-        subTotal
-        subTotalWithTax
-        shipping
-        shippingWithTax
-        total
-        totalWithTax
-        lines {
-            id
-            quantity
-            linePrice
-            linePriceWithTax
-            discountedLinePriceWithTax
-            proratedLinePriceWithTax
-            discounts {
-                description
-                amountWithTax
-            }
-            productVariant {
-                id
-                name
-            }
-            items {
-                id
-                createdAt
-                updatedAt
-                cancelled
-                unitPrice
-            }
-        }
-        surcharges {
-            id
-            description
-            sku
-            price
-            priceWithTax
-            taxRate
-        }
-        payments {
-            id
-            transactionId
-            state
-            amount
-            method
-            metadata
-            refunds {
-                id
-                state
-                total
-                paymentId
-            }
-        }
-        modifications {
-            id
-            note
-            priceChange
-            isSettled
-            orderItems {
-                id
-            }
-            surcharges {
-                id
-            }
-            payment {
-                id
-                state
-                amount
-                method
-            }
-            refund {
-                id
-                state
-                total
-                paymentId
-            }
-        }
-        promotions {
-            id
-            name
-            couponCode
-        }
-        discounts {
-            description
-            adjustmentSource
-            amount
-            amountWithTax
-        }
-        shippingAddress {
-            streetLine1
-            city
-            postalCode
-            province
-            countryCode
-            country
-        }
-        billingAddress {
-            streetLine1
-            city
-            postalCode
-            province
-            countryCode
-            country
-        }
-    }
-`;
-
-export const GET_ORDER_WITH_MODIFICATIONS = gql`
-    query GetOrderWithModifications($id: ID!) {
-        order(id: $id) {
-            ...OrderWithModifications
-        }
-    }
-    ${ORDER_WITH_MODIFICATION_FRAGMENT}
-`;
-
-export const MODIFY_ORDER = gql`
-    mutation ModifyOrder($input: ModifyOrderInput!) {
-        modifyOrder(input: $input) {
-            ...OrderWithModifications
-            ... on ErrorResult {
-                errorCode
-                message
-            }
-        }
-    }
-    ${ORDER_WITH_MODIFICATION_FRAGMENT}
-`;
-
-export const ADD_MANUAL_PAYMENT = gql`
-    mutation AddManualPayment($input: ManualPaymentInput!) {
-        addManualPaymentToOrder(input: $input) {
-            ...OrderWithModifications
-            ... on ErrorResult {
-                errorCode
-                message
-            }
-        }
-    }
-    ${ORDER_WITH_MODIFICATION_FRAGMENT}
-`;
-
-// Note, we don't use the gql tag around these due to the customFields which
-// would cause a codegen error.
-const ADD_ITEM_TO_ORDER_WITH_CUSTOM_FIELDS = `
-    mutation AddItemToOrder($productVariantId: ID!, $quantity: Int!, $customFields: OrderLineCustomFieldsInput) {
-        addItemToOrder(productVariantId: $productVariantId, quantity: $quantity, customFields: $customFields) {
-            ...on Order { id }
-        }
-    }
-`;
-const GET_ORDER_WITH_CUSTOM_FIELDS = `
-    query GetOrderCustomFields($id: ID!) {
-        order(id: $id) {
-            customFields { points }
-            lines { id, customFields { color } }
-        }
-    }
-`;

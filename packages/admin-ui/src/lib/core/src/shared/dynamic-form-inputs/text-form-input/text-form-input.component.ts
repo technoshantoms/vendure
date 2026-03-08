@@ -1,5 +1,5 @@
 import { ChangeDetectionStrategy, Component } from '@angular/core';
-import { FormControl } from '@angular/forms';
+import { UntypedFormControl } from '@angular/forms';
 import { DefaultFormComponentConfig, DefaultFormComponentId } from '@vendure/common/lib/shared-types';
 
 import { FormInputComponent, InputComponentConfig } from '../../../common/component-registry-types';
@@ -16,11 +16,12 @@ import { FormInputComponent, InputComponentConfig } from '../../../common/compon
     templateUrl: './text-form-input.component.html',
     styleUrls: ['./text-form-input.component.scss'],
     changeDetection: ChangeDetectionStrategy.OnPush,
+    standalone: false,
 })
 export class TextFormInputComponent implements FormInputComponent {
     static readonly id: DefaultFormComponentId = 'text-form-input';
     readonly: boolean;
-    formControl: FormControl;
+    formControl: UntypedFormControl;
     config: DefaultFormComponentConfig<'text-form-input'>;
 
     get prefix() {

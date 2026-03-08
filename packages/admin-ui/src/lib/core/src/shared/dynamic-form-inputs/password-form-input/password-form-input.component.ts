@@ -1,5 +1,5 @@
 import { ChangeDetectionStrategy, Component } from '@angular/core';
-import { FormControl } from '@angular/forms';
+import { UntypedFormControl } from '@angular/forms';
 import { DefaultFormComponentId } from '@vendure/common/lib/shared-types';
 
 import { FormInputComponent, InputComponentConfig } from '../../../common/component-registry-types';
@@ -16,10 +16,11 @@ import { FormInputComponent, InputComponentConfig } from '../../../common/compon
     templateUrl: './password-form-input.component.html',
     styleUrls: ['./password-form-input.component.scss'],
     changeDetection: ChangeDetectionStrategy.OnPush,
+    standalone: false,
 })
 export class PasswordFormInputComponent implements FormInputComponent {
     static readonly id: DefaultFormComponentId = 'password-form-input';
     readonly: boolean;
-    formControl: FormControl;
+    formControl: UntypedFormControl;
     config: InputComponentConfig;
 }

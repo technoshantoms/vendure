@@ -1,34 +1,47 @@
+import { DeletionResult } from '@vendure/common/lib/generated-types';
+import { Facet, LanguageCode, mergeConfig } from '@vendure/core';
 import { createTestEnvironment } from '@vendure/testing';
-import gql from 'graphql-tag';
 import path from 'path';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { initialData } from '../../../e2e-common/e2e-initial-data';
-import { testConfig, TEST_SETUP_TIMEOUT_MS } from '../../../e2e-common/test-config';
+import { TEST_SETUP_TIMEOUT_MS, testConfig } from '../../../e2e-common/test-config';
 
-import { ZONE_FRAGMENT } from './graphql/fragments';
+import { graphql, ResultOf, VariablesOf } from './graphql/graphql-admin';
 import {
-    AddMembersToZone,
-    CreateZone,
-    DeleteZone,
-    DeletionResult,
-    GetActiveChannelWithZoneMembersQuery,
-    GetCountryList,
-    GetZone,
-    GetZones,
-    RemoveMembersFromZone,
-    UpdateChannel,
-    UpdateZone,
-} from './graphql/generated-e2e-admin-types';
-import { GET_COUNTRY_LIST, UPDATE_CHANNEL } from './graphql/shared-definitions';
+    addMembersToZoneDocument,
+    createFacetDocument,
+    createZoneDocument,
+    deleteZoneDocument,
+    getActiveChannelWithZoneMembersDocument,
+    getCountryListDocument,
+    getZoneDocument,
+    getZonesDocument,
+    removeMembersFromZoneDocument,
+    updateChannelDocument,
+    updateZoneDocument,
+} from './graphql/shared-definitions';
 
-// tslint:disable:no-non-null-assertion
+/* eslint-disable @typescript-eslint/no-non-null-assertion */
 
 describe('Zone resolver', () => {
-    const { server, adminClient } = createTestEnvironment(testConfig());
-    let countries: GetCountryList.Items[];
+    const { server, adminClient } = createTestEnvironment(
+        mergeConfig(testConfig(), {
+            customFields: {
+                Zone: [
+                    {
+                        name: 'relatedFacet',
+                        type: 'relation',
+                        entity: Facet,
+                    },
+                ],
+            },
+        }),
+    );
+    let countries: ResultOf<typeof getCountryListDocument>['countries']['items'];
     let zones: Array<{ id: string; name: string }>;
     let oceania: { id: string; name: string };
-    let pangaea: { id: string; name: string; members: any[] };
+    let pangaea: ResultOf<typeof createZoneDocument>['createZone'];
 
     beforeAll(async () => {
         await server.init({
@@ -38,7 +51,7 @@ describe('Zone resolver', () => {
         });
         await adminClient.asSuperAdmin();
 
-        const result = await adminClient.query<GetCountryList.Query>(GET_COUNTRY_LIST, {});
+        const result = await adminClient.query(getCountryListDocument, {});
         countries = result.countries.items;
     }, TEST_SETUP_TIMEOUT_MS);
 
@@ -47,14 +60,14 @@ describe('Zone resolver', () => {
     });
 
     it('zones', async () => {
-        const result = await adminClient.query<GetZones.Query>(GET_ZONE_LIST);
-        expect(result.zones.length).toBe(5);
-        zones = result.zones;
+        const result = await adminClient.query(getZonesDocument);
+        expect(result.zones.items.length).toBe(5);
+        zones = result.zones.items;
         oceania = zones[0];
     });
 
     it('zone', async () => {
-        const result = await adminClient.query<GetZone.Query, GetZone.Variables>(GET_ZONE, {
+        const result = await adminClient.query(getZoneDocument, {
             id: oceania.id,
         });
 
@@ -62,15 +75,13 @@ describe('Zone resolver', () => {
     });
 
     it('zone.members field resolver', async () => {
-        const { activeChannel } = await adminClient.query<GetActiveChannelWithZoneMembersQuery>(
-            GET_ACTIVE_CHANNEL_WITH_ZONE_MEMBERS,
-        );
+        const { activeChannel } = await adminClient.query(getActiveChannelWithZoneMembersDocument);
 
         expect(activeChannel.defaultShippingZone?.members.length).toBe(2);
     });
 
     it('updateZone', async () => {
-        const result = await adminClient.query<UpdateZone.Mutation, UpdateZone.Variables>(UPDATE_ZONE, {
+        const result = await adminClient.query(updateZoneDocument, {
             input: {
                 id: oceania.id,
                 name: 'oceania2',
@@ -81,7 +92,7 @@ describe('Zone resolver', () => {
     });
 
     it('createZone', async () => {
-        const result = await adminClient.query<CreateZone.Mutation, CreateZone.Variables>(CREATE_ZONE, {
+        const result = await adminClient.query(createZoneDocument, {
             input: {
                 name: 'Pangaea',
                 memberIds: [countries[0].id, countries[1].id],
@@ -94,23 +105,17 @@ describe('Zone resolver', () => {
     });
 
     it('addMembersToZone', async () => {
-        const result = await adminClient.query<AddMembersToZone.Mutation, AddMembersToZone.Variables>(
-            ADD_MEMBERS_TO_ZONE,
-            {
-                zoneId: oceania.id,
-                memberIds: [countries[2].id, countries[3].id],
-            },
-        );
+        const result = await adminClient.query(addMembersToZoneDocument, {
+            zoneId: oceania.id,
+            memberIds: [countries[2].id, countries[3].id],
+        });
 
         expect(!!result.addMembersToZone.members.find(m => m.name === countries[2].name)).toBe(true);
         expect(!!result.addMembersToZone.members.find(m => m.name === countries[3].name)).toBe(true);
     });
 
     it('removeMembersFromZone', async () => {
-        const result = await adminClient.query<
-            RemoveMembersFromZone.Mutation,
-            RemoveMembersFromZone.Variables
-        >(REMOVE_MEMBERS_FROM_ZONE, {
+        const result = await adminClient.query(removeMembersFromZoneDocument, {
             zoneId: oceania.id,
             memberIds: [countries[0].id, countries[2].id],
         });
@@ -122,7 +127,7 @@ describe('Zone resolver', () => {
 
     describe('deletion', () => {
         it('deletes Zone not used in any TaxRate', async () => {
-            const result1 = await adminClient.query<DeleteZone.Mutation, DeleteZone.Variables>(DELETE_ZONE, {
+            const result1 = await adminClient.query(deleteZoneDocument, {
                 id: pangaea.id,
             });
 
@@ -131,12 +136,12 @@ describe('Zone resolver', () => {
                 message: '',
             });
 
-            const result2 = await adminClient.query<GetZones.Query>(GET_ZONE_LIST);
-            expect(result2.zones.find(c => c.id === pangaea.id)).toBeUndefined();
+            const result2 = await adminClient.query(getZonesDocument);
+            expect(result2.zones.items.find(c => c.id === pangaea.id)).toBeUndefined();
         });
 
         it('does not delete Zone that is used in one or more TaxRates', async () => {
-            const result1 = await adminClient.query<DeleteZone.Mutation, DeleteZone.Variables>(DELETE_ZONE, {
+            const result1 = await adminClient.query(deleteZoneDocument, {
                 id: oceania.id,
             });
 
@@ -147,19 +152,19 @@ describe('Zone resolver', () => {
                     'TaxRates: Standard Tax Oceania, Reduced Tax Oceania, Zero Tax Oceania',
             });
 
-            const result2 = await adminClient.query<GetZones.Query>(GET_ZONE_LIST);
-            expect(result2.zones.find(c => c.id === oceania.id)).not.toBeUndefined();
+            const result2 = await adminClient.query(getZonesDocument);
+            expect(result2.zones.items.find(c => c.id === oceania.id)).not.toBeUndefined();
         });
 
         it('does not delete Zone that is used as a Channel defaultTaxZone', async () => {
-            await adminClient.query<UpdateChannel.Mutation, UpdateChannel.Variables>(UPDATE_CHANNEL, {
+            await adminClient.query(updateChannelDocument, {
                 input: {
                     id: 'T_1',
                     defaultTaxZoneId: oceania.id,
                 },
             });
 
-            const result1 = await adminClient.query<DeleteZone.Mutation, DeleteZone.Variables>(DELETE_ZONE, {
+            const result1 = await adminClient.query(deleteZoneDocument, {
                 id: oceania.id,
             });
 
@@ -170,12 +175,12 @@ describe('Zone resolver', () => {
                     '__default_channel__',
             });
 
-            const result2 = await adminClient.query<GetZones.Query>(GET_ZONE_LIST);
-            expect(result2.zones.find(c => c.id === oceania.id)).not.toBeUndefined();
+            const result2 = await adminClient.query(getZonesDocument);
+            expect(result2.zones.items.find(c => c.id === oceania.id)).not.toBeUndefined();
         });
 
         it('does not delete Zone that is used as a Channel defaultShippingZone', async () => {
-            await adminClient.query<UpdateChannel.Mutation, UpdateChannel.Variables>(UPDATE_CHANNEL, {
+            await adminClient.query(updateChannelDocument, {
                 input: {
                     id: 'T_1',
                     defaultTaxZoneId: 'T_1',
@@ -183,7 +188,7 @@ describe('Zone resolver', () => {
                 },
             });
 
-            const result1 = await adminClient.query<DeleteZone.Mutation, DeleteZone.Variables>(DELETE_ZONE, {
+            const result1 = await adminClient.query(deleteZoneDocument, {
                 id: oceania.id,
             });
 
@@ -194,85 +199,115 @@ describe('Zone resolver', () => {
                     '__default_channel__',
             });
 
-            const result2 = await adminClient.query<GetZones.Query>(GET_ZONE_LIST);
-            expect(result2.zones.find(c => c.id === oceania.id)).not.toBeUndefined();
+            const result2 = await adminClient.query(getZonesDocument);
+            expect(result2.zones.items.find(c => c.id === oceania.id)).not.toBeUndefined();
+        });
+    });
+
+    describe('Zone custom fields', () => {
+        let testFacet: ResultOf<typeof createFacetDocument>['createFacet'];
+
+        // Create a target entity (Facet) to link the Zone to
+        it('create a target Facet', async () => {
+            const result = await adminClient.query(createFacetDocument, {
+                input: {
+                    code: 'test-relation-facet',
+                    isPrivate: false,
+                    translations: [{ languageCode: LanguageCode.en, name: 'Test Relation Facet' }],
+                },
+            });
+
+            testFacet = result.createFacet;
+            expect(testFacet.name).toBe('Test Relation Facet');
+        });
+
+        // Test createZone with a custom relation field
+        it('createZone persists custom relation field', async () => {
+            const input: VariablesOf<typeof createZoneDocument>['input'] = {
+                name: 'Zone with Custom Relation',
+                memberIds: [],
+                customFields: {
+                    relatedFacetId: testFacet.id,
+                },
+            };
+
+            const result = await adminClient.query(createZoneWithCustomFieldsDocument, { input });
+
+            //  Verify the return value
+            expect(result.createZone.customFields.relatedFacet.id).toBe(testFacet.id);
+            //  Verify by querying it again from the database
+            const result2 = await adminClient.query(getZoneWithCustomFieldsDocument, {
+                id: result.createZone.id,
+            });
+            expect(result2.zone?.customFields.relatedFacet.id).toBe(testFacet.id);
+        });
+
+        // Test updateZone with a custom relation field
+        it('updateZone persists custom relation field', async () => {
+            const result = await adminClient.query(updateZoneWithCustomFieldsDocument, {
+                input: {
+                    id: zones[1].id,
+                    customFields: {
+                        relatedFacetId: testFacet.id,
+                    },
+                },
+            });
+
+            // Verify the return value
+            expect(result.updateZone.customFields.relatedFacet.id).toBe(testFacet.id);
+
+            // Verify by querying it again from the database
+            const result2 = await adminClient.query(getZoneWithCustomFieldsDocument, { id: zones[1].id });
+            expect(result2.zone?.customFields.relatedFacet.id).toBe(testFacet.id);
         });
     });
 });
 
-const DELETE_ZONE = gql`
-    mutation DeleteZone($id: ID!) {
-        deleteZone(id: $id) {
-            result
-            message
-        }
-    }
-`;
-
-const GET_ZONE_LIST = gql`
-    query GetZones {
-        zones {
-            id
-            name
-        }
-    }
-`;
-
-export const GET_ZONE = gql`
-    query GetZone($id: ID!) {
-        zone(id: $id) {
-            ...Zone
-        }
-    }
-    ${ZONE_FRAGMENT}
-`;
-
-export const GET_ACTIVE_CHANNEL_WITH_ZONE_MEMBERS = gql`
-    query GetActiveChannelWithZoneMembers {
-        activeChannel {
-            id
-            defaultShippingZone {
+const zoneWithCustomFieldsFragment = graphql(`
+    fragment ZoneCustomFields on Zone {
+        customFields {
+            relatedFacet {
                 id
-                members {
-                    name
-                }
             }
         }
     }
-`;
+`);
 
-export const CREATE_ZONE = gql`
-    mutation CreateZone($input: CreateZoneInput!) {
-        createZone(input: $input) {
-            ...Zone
+const createZoneWithCustomFieldsDocument = graphql(
+    `
+        mutation CreateZoneWithCF($input: CreateZoneInput!) {
+            createZone(input: $input) {
+                id
+                name
+                ...ZoneCustomFields
+            }
         }
-    }
-    ${ZONE_FRAGMENT}
-`;
+    `,
+    [zoneWithCustomFieldsFragment],
+);
 
-export const UPDATE_ZONE = gql`
-    mutation UpdateZone($input: UpdateZoneInput!) {
-        updateZone(input: $input) {
-            ...Zone
+const updateZoneWithCustomFieldsDocument = graphql(
+    `
+        mutation UpdateZoneWithCF($input: UpdateZoneInput!) {
+            updateZone(input: $input) {
+                id
+                name
+                ...ZoneCustomFields
+            }
         }
-    }
-    ${ZONE_FRAGMENT}
-`;
+    `,
+    [zoneWithCustomFieldsFragment],
+);
 
-export const ADD_MEMBERS_TO_ZONE = gql`
-    mutation AddMembersToZone($zoneId: ID!, $memberIds: [ID!]!) {
-        addMembersToZone(zoneId: $zoneId, memberIds: $memberIds) {
-            ...Zone
+const getZoneWithCustomFieldsDocument = graphql(
+    `
+        query GetZoneWithCustomFields($id: ID!) {
+            zone(id: $id) {
+                id
+                name
+                ...ZoneCustomFields
+            }
         }
-    }
-    ${ZONE_FRAGMENT}
-`;
-
-export const REMOVE_MEMBERS_FROM_ZONE = gql`
-    mutation RemoveMembersFromZone($zoneId: ID!, $memberIds: [ID!]!) {
-        removeMembersFromZone(zoneId: $zoneId, memberIds: $memberIds) {
-            ...Zone
-        }
-    }
-    ${ZONE_FRAGMENT}
-`;
+    `,
+    [zoneWithCustomFieldsFragment],
+);

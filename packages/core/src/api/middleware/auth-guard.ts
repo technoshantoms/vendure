@@ -3,20 +3,28 @@ import { Reflector } from '@nestjs/core';
 import { Permission } from '@vendure/common/lib/generated-types';
 import { Request, Response } from 'express';
 import { GraphQLResolveInfo } from 'graphql';
+import ms from 'ms';
 
-import { REQUEST_CONTEXT_KEY } from '../../common/constants';
 import { ForbiddenError } from '../../common/error/errors';
+import { API_KEY_AUTH_STRATEGY_NAME } from '../../config';
 import { ConfigService } from '../../config/config.service';
-import { LogLevel } from '../../config/logger/vendure-logger';
+import { Logger, LogLevel } from '../../config/logger/vendure-logger';
 import { CachedSession } from '../../config/session-cache/session-cache-strategy';
 import { Customer } from '../../entity/customer/customer.entity';
 import { RequestContextService } from '../../service/helpers/request-context/request-context.service';
+import { ApiKeyService } from '../../service/services/api-key.service';
 import { ChannelService } from '../../service/services/channel.service';
 import { CustomerService } from '../../service/services/customer.service';
 import { SessionService } from '../../service/services/session.service';
-import { extractSessionToken } from '../common/extract-session-token';
+import { extractSessionToken, ExtractTokenResult } from '../common/extract-session-token';
+import { getApiType } from '../common/get-api-type';
+import { isFieldResolver } from '../common/is-field-resolver';
 import { parseContext } from '../common/parse-context';
-import { RequestContext } from '../common/request-context';
+import {
+    internal_getRequestContext,
+    internal_setRequestContext,
+    RequestContext,
+} from '../common/request-context';
 import { setSessionToken } from '../common/set-session-token';
 import { PERMISSIONS_METADATA_KEY } from '../decorators/allow.decorator';
 
@@ -31,8 +39,6 @@ import { PERMISSIONS_METADATA_KEY } from '../decorators/allow.decorator';
  */
 @Injectable()
 export class AuthGuard implements CanActivate {
-    strategy: any;
-
     constructor(
         private reflector: Reflector,
         private configService: ConfigService,
@@ -40,23 +46,23 @@ export class AuthGuard implements CanActivate {
         private sessionService: SessionService,
         private customerService: CustomerService,
         private channelService: ChannelService,
+        private apiKeyService: ApiKeyService,
     ) {}
 
     async canActivate(context: ExecutionContext): Promise<boolean> {
         const { req, res, info } = parseContext(context);
-        const isFieldResolver = this.isFieldResolver(info);
+        const targetIsFieldResolver = isFieldResolver(info);
         const permissions = this.reflector.get<Permission[]>(PERMISSIONS_METADATA_KEY, context.getHandler());
-        if (isFieldResolver && !permissions) {
+        if (targetIsFieldResolver && !permissions) {
             return true;
         }
         const authDisabled = this.configService.authOptions.disableAuth;
-        const isPublic = !!permissions && permissions.includes(Permission.Public);
         const hasOwnerPermission = !!permissions && permissions.includes(Permission.Owner);
         let requestContext: RequestContext;
-        if (isFieldResolver) {
-            requestContext = (req as any)[REQUEST_CONTEXT_KEY];
+        if (targetIsFieldResolver) {
+            requestContext = internal_getRequestContext(req);
         } else {
-            const session = await this.getSession(req, res, hasOwnerPermission);
+            const session = await this.getSession(req, res, hasOwnerPermission, info);
             requestContext = await this.requestContextService.fromRequest(req, info, permissions, session);
 
             const requestContextShouldBeReinitialized = await this.setActiveChannel(requestContext, session);
@@ -68,20 +74,19 @@ export class AuthGuard implements CanActivate {
                     session,
                 );
             }
-            (req as any)[REQUEST_CONTEXT_KEY] = requestContext;
+            internal_setRequestContext(req, requestContext, context);
         }
 
-        if (authDisabled || !permissions || isPublic) {
+        if (authDisabled) {
             return true;
-        } else {
-            const canActivate =
-                requestContext.userHasPermissions(permissions) || requestContext.authorizedAsOwnerOnly;
-            if (!canActivate) {
-                throw new ForbiddenError(LogLevel.Verbose);
-            } else {
-                return canActivate;
-            }
         }
+        const strategy = this.configService.authOptions.entityAccessControlStrategy;
+        const isAllowed = await strategy.canAccess(requestContext, permissions ?? []);
+        if (!isAllowed) {
+            throw new ForbiddenError(LogLevel.Verbose);
+        }
+        await strategy.prepareAccessControl?.(requestContext);
+        return true;
     }
 
     private async setActiveChannel(
@@ -110,7 +115,7 @@ export class AuthGuard implements CanActivate {
                         await this.channelService.assignToChannels(requestContext, Customer, customer.id, [
                             requestContext.channelId,
                         ]);
-                    } catch (e) {
+                    } catch (e: any) {
                         const isDuplicateError =
                             e.code === 'ER_DUP_ENTRY' /* mySQL/MariaDB */ ||
                             e.code === '23505'; /* postgres */
@@ -118,7 +123,7 @@ export class AuthGuard implements CanActivate {
                             // For a duplicate error, this means that concurrent requests have resulted in attempting to
                             // assign the Customer to the channel more than once. In this case we can safely ignore the
                             // error as the Customer was successfully assigned in the earlier call.
-                            // See https://github.com/vendure-ecommerce/vendure/issues/834
+                            // See https://github.com/vendurehq/vendure/issues/834
                         } else {
                             throw e;
                         }
@@ -134,14 +139,21 @@ export class AuthGuard implements CanActivate {
         req: Request,
         res: Response,
         hasOwnerPermission: boolean,
+        info?: GraphQLResolveInfo,
     ): Promise<CachedSession | undefined> {
-        const sessionToken = extractSessionToken(req, this.configService.authOptions.tokenMethod);
+        const sessionToken = extractSessionToken(
+            req,
+            this.configService.authOptions.tokenMethod,
+            this.configService.authOptions.apiKeyHeaderKey,
+        );
+
         let serializedSession: CachedSession | undefined;
-        if (sessionToken) {
-            serializedSession = await this.sessionService.getSessionFromToken(sessionToken);
+        if (sessionToken?.token) {
+            serializedSession = await this.getSessionFromToken(req, sessionToken, info);
             if (serializedSession) {
                 return serializedSession;
             }
+
             // if there is a token but it cannot be validated to a Session,
             // then the token is no longer valid and should be unset.
             setSessionToken({
@@ -166,15 +178,75 @@ export class AuthGuard implements CanActivate {
         return serializedSession;
     }
 
-    /**
-     * Returns true is this guard is being called on a FieldResolver, i.e. not a top-level
-     * Query or Mutation resolver.
-     */
-    private isFieldResolver(info?: GraphQLResolveInfo): boolean {
-        if (!info) {
-            return false;
+    private async getSessionFromToken(
+        req: Request,
+        extracted: ExtractTokenResult,
+        info?: GraphQLResolveInfo,
+    ): Promise<CachedSession | undefined> {
+        if (extracted.method !== 'api-key') {
+            return this.sessionService.getSessionFromToken(extracted.token);
         }
-        const parentType = info?.parentType?.name;
-        return parentType !== 'Query' && parentType !== 'Mutation' && parentType !== 'Subscription';
+
+        const strategy = this.apiKeyService.getApiKeyStrategyByApiType(getApiType(info));
+        const parseResult = strategy.parse(extracted.token);
+        if (!parseResult) {
+            return;
+        }
+
+        const ctx = await this.requestContextService.fromRequest(req, info);
+
+        const apiKey = await this.apiKeyService.findOneByLookupId(ctx, parseResult.lookupId, [
+            'user',
+            'user.roles',
+            'user.roles.channels',
+        ]);
+        if (!apiKey) {
+            return;
+        }
+
+        const isHashMatching = await strategy.hashingStrategy.check(extracted.token, apiKey.apiKeyHash);
+        if (!isHashMatching) {
+            return;
+        }
+
+        const lastUsedThreshold = new Date(
+            Date.now() -
+                (typeof strategy.lastUsedAtUpdateInterval === 'string'
+                    ? ms(strategy.lastUsedAtUpdateInterval)
+                    : strategy.lastUsedAtUpdateInterval),
+        );
+        if (!apiKey.lastUsedAt || apiKey.lastUsedAt < lastUsedThreshold) {
+            this.apiKeyService
+                .updateLastUsedAtByLookupId(apiKey.lookupId)
+                // Update the lastUsedAt timestamp in the background, we don't want to hold up the request
+                .catch(err =>
+                    Logger.error(
+                        `Failed to update lastUsedAt for ApiKey with lookupId ${parseResult.lookupId}`,
+                        undefined,
+                        err?.stack,
+                    ),
+                );
+        }
+
+        const session = await this.sessionService.getSessionFromToken(apiKey.apiKeyHash);
+        if (session) {
+            return session;
+        }
+
+        // At this point we may assert:
+        // 1. The token came from the api-key header
+        // 2. The hash matches
+        // 3. There is no session
+        // We can conclude that the API-Key is actually broken.
+        // For example someone could have deleted the session manually in the DB.
+        // We must create a new session, otherwise the API-Key is unusable.
+        await this.sessionService.createNewAuthenticatedSession(
+            ctx,
+            apiKey.user,
+            API_KEY_AUTH_STRATEGY_NAME,
+            apiKey.apiKeyHash,
+        );
+
+        return this.sessionService.getSessionFromToken(apiKey.apiKeyHash);
     }
 }

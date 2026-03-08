@@ -19,6 +19,7 @@ import { ServerConfigService } from '../../../data/server-config';
     templateUrl: './asset-file-input.component.html',
     styleUrls: ['./asset-file-input.component.scss'],
     changeDetection: ChangeDetectionStrategy.OnPush,
+    standalone: false,
 })
 export class AssetFileInputComponent implements OnInit {
     /**
@@ -51,7 +52,7 @@ export class AssetFileInputComponent implements OnInit {
         this.fitDropZoneToTarget();
     }
 
-    // DragEvent is not supported in Safari, see https://github.com/vendure-ecommerce/vendure/pull/284
+    // DragEvent is not supported in Safari, see https://github.com/vendurehq/vendure/pull/284
     @HostListener('document:dragleave', ['$event'])
     onDragLeave(event: any) {
         if (!event.clientX && !event.clientY) {
@@ -67,7 +68,7 @@ export class AssetFileInputComponent implements OnInit {
         event.preventDefault();
     }
 
-    // DragEvent is not supported in Safari, see https://github.com/vendure-ecommerce/vendure/pull/284
+    // DragEvent is not supported in Safari, see https://github.com/vendurehq/vendure/pull/284
     onDrop(event: any) {
         event.preventDefault();
         this.dragging = false;

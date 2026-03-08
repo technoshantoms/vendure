@@ -1,8 +1,8 @@
 import { DocumentNode } from 'graphql';
 
-import { RequestContext } from '../../api/index';
-import { InjectableStrategy } from '../../common/index';
-import { Order } from '../../entity/index';
+import { RequestContext } from '../../api/common/request-context';
+import { InjectableStrategy } from '../../common/types/injectable-strategy';
+import { Order } from '../../entity/order/order.entity';
 
 export const ACTIVE_ORDER_INPUT_FIELD_NAME = 'activeOrderInput';
 
@@ -55,7 +55,7 @@ export const ACTIVE_ORDER_INPUT_FIELD_NAME = 'activeOrderInput';
  * ```
  *
  * @example
- * ```TypeScript
+ * ```ts
  * import { ID } from '\@vendure/common/lib/shared-types';
  * import {
  *   ActiveOrderStrategy,
@@ -141,7 +141,7 @@ export interface ActiveOrderStrategy<InputType extends Record<string, any> | voi
      * @example
      * For example, given the following:
      *
-     * ```TypeScript
+     * ```ts
      * defineInputType() {
      *   return gql`
      *      input OrderTokenInput {

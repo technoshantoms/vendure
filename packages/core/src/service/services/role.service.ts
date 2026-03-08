@@ -14,9 +14,12 @@ import {
 } from '@vendure/common/lib/shared-constants';
 import { ID, PaginatedList } from '@vendure/common/lib/shared-types';
 import { unique } from '@vendure/common/lib/unique';
+import { In } from 'typeorm';
 
 import { RequestContext } from '../../api/common/request-context';
-import { RelationPaths } from '../../api/index';
+import { RelationPaths } from '../../api/decorators/relations.decorator';
+import { CacheService } from '../../cache';
+import { RequestContextCacheService } from '../../cache/request-context-cache.service';
 import { getAllPermissionsMetadata } from '../../common/constants';
 import {
     EntityNotFoundError,
@@ -24,6 +27,7 @@ import {
     InternalServerError,
     UserInputError,
 } from '../../common/error/errors';
+import { Instrument } from '../../common/instrument-decorator';
 import { ListQueryOptions } from '../../common/types/common-types';
 import { assertFound, idsAreEqual } from '../../common/utils';
 import { ConfigService } from '../../config/config.service';
@@ -49,14 +53,30 @@ import { ChannelService } from './channel.service';
  * @docsCategory services
  */
 @Injectable()
+@Instrument()
 export class RoleService {
+    private rolesCacheKey = 'RoleService.allRoles';
+    private rolesCache = this.cacheService.createCache({
+        getKey: () => this.rolesCacheKey,
+        options: {
+            ttl: 1000 * 60 * 60, // 1 hour
+        },
+    });
+
     constructor(
         private connection: TransactionalConnection,
         private channelService: ChannelService,
         private listQueryBuilder: ListQueryBuilder,
         private configService: ConfigService,
         private eventBus: EventBus,
-    ) {}
+        private requestContextCache: RequestContextCacheService,
+        private cacheService: CacheService,
+    ) {
+        // When a Role is created, updated or deleted, we need to invalidate the roles cache
+        this.eventBus.ofType(RoleEvent).subscribe(event => {
+            void this.rolesCache.delete(this.rolesCacheKey);
+        });
+    }
 
     async initRoles() {
         await this.ensureSuperAdminRoleExists();
@@ -64,24 +84,47 @@ export class RoleService {
         await this.ensureRolesHaveValidPermissions();
     }
 
-    findAll(
+    async findAll(
         ctx: RequestContext,
         options?: ListQueryOptions<Role>,
         relations?: RelationPaths<Role>,
     ): Promise<PaginatedList<Role>> {
-        return this.listQueryBuilder
-            .build(Role, options, { relations: relations ?? ['channels'], ctx })
-            .getManyAndCount()
-            .then(([items, totalItems]) => ({
-                items,
-                totalItems,
-            }));
+        // Compute the set of Role IDs the active user can read (channel + permission check) up front to ensure sort/skip/take operate only over visible Roles.
+        const allRoles = await this.getAllRolesWithChannels(ctx);
+
+        const visibleRoleIds: ID[] = [];
+        for (const role of allRoles) {
+            if (await this.activeUserCanReadRole(ctx, role)) {
+                visibleRoleIds.push(role.id);
+            }
+        }
+
+        if (visibleRoleIds.length === 0) {
+            return { items: [], totalItems: 0 };
+        }
+
+        const [items, totalItems] = await this.listQueryBuilder
+            .build(Role, options, {
+                relations: unique([...(relations ?? []), 'channels']),
+                ctx,
+            })
+            .andWhere({ id: In(visibleRoleIds) })
+            .getManyAndCount();
+        return { items, totalItems };
     }
 
     findOne(ctx: RequestContext, roleId: ID, relations?: RelationPaths<Role>): Promise<Role | undefined> {
-        return this.connection.getRepository(ctx, Role).findOne(roleId, {
-            relations: relations ?? ['channels'],
-        });
+        return this.connection
+            .getRepository(ctx, Role)
+            .findOne({
+                where: { id: roleId },
+                relations: unique([...(relations ?? []), 'channels']),
+            })
+            .then(async result => {
+                if (result && (await this.activeUserCanReadRole(ctx, result))) {
+                    return result;
+                }
+            });
     }
 
     getChannelsForRole(ctx: RequestContext, roleId: ID): Promise<Channel[]> {
@@ -95,7 +138,7 @@ export class RoleService {
     getSuperAdminRole(ctx?: RequestContext): Promise<Role> {
         return this.getRoleByCode(ctx, SUPER_ADMIN_ROLE_CODE).then(role => {
             if (!role) {
-                throw new InternalServerError(`error.super-admin-role-not-found`);
+                throw new InternalServerError('error.super-admin-role-not-found');
             }
             return role;
         });
@@ -108,7 +151,7 @@ export class RoleService {
     getCustomerRole(ctx?: RequestContext): Promise<Role> {
         return this.getRoleByCode(ctx, CUSTOMER_ROLE_CODE).then(role => {
             if (!role) {
-                throw new InternalServerError(`error.customer-role-not-found`);
+                throw new InternalServerError('error.customer-role-not-found');
             }
             return role;
         });
@@ -152,6 +195,30 @@ export class RoleService {
         return false;
     }
 
+    private async activeUserCanReadRole(ctx: RequestContext, role: Role): Promise<boolean> {
+        const permissionsRequired = getChannelPermissions([role]);
+        for (const channelPermissions of permissionsRequired) {
+            const activeUserHasRequiredPermissions = await this.userHasAllPermissionsOnChannel(
+                ctx,
+                channelPermissions.id,
+                channelPermissions.permissions,
+            );
+            if (!activeUserHasRequiredPermissions) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private async getAllRolesWithChannels(ctx: RequestContext): Promise<Role[]> {
+        const allRolesJson = await this.rolesCache.get(this.rolesCacheKey, async () => {
+            const roles = await this.connection.getRepository(ctx, Role).find({ relations: ['channels'] });
+            return JSON.stringify(roles);
+        });
+
+        return JSON.parse(allRolesJson);
+    }
+
     /**
      * @description
      * Returns true if the User has all the specified permissions on that Channel
@@ -174,13 +241,24 @@ export class RoleService {
         ctx: RequestContext,
         channelId: ID,
     ): Promise<Permission[]> {
-        if (ctx.activeUserId == null) {
+        const { activeUserId } = ctx;
+        if (activeUserId == null) {
             return [];
         }
-        const user = await this.connection.getEntityOrThrow(ctx, User, ctx.activeUserId, {
-            relations: ['roles', 'roles.channels'],
-        });
-        const userChannels = getUserChannelsPermissions(user);
+        // For apps with many channels, this is a performance bottleneck as it will be called
+        // for each channel in certain code paths such as the GetActiveAdministrator query in the
+        // admin ui. Caching the result prevents unbounded quadratic slowdown.
+        const userChannels = await this.requestContextCache.get(
+            ctx,
+            `RoleService.getActiveUserPermissionsOnChannel.user(${activeUserId})`,
+            async () => {
+                const user = await this.connection.getEntityOrThrow(ctx, User, activeUserId, {
+                    relations: ['roles', 'roles.channels'],
+                });
+                return getUserChannelsPermissions(user);
+            },
+        );
+
         const channel = userChannels.find(c => idsAreEqual(c.id, channelId));
         if (!channel) {
             return [];
@@ -199,7 +277,7 @@ export class RoleService {
         }
         await this.checkActiveUserHasSufficientPermissions(ctx, targetChannels, input.permissions);
         const role = await this.createRoleForChannels(ctx, input, targetChannels);
-        this.eventBus.publish(new RoleEvent(ctx, role, 'created', input));
+        await this.eventBus.publish(new RoleEvent(ctx, role, 'created', input));
         return role;
     }
 
@@ -210,7 +288,7 @@ export class RoleService {
             throw new EntityNotFoundError('Role', input.id);
         }
         if (role.code === SUPER_ADMIN_ROLE_CODE || role.code === CUSTOMER_ROLE_CODE) {
-            throw new InternalServerError(`error.cannot-modify-role`, { roleCode: role.code });
+            throw new InternalServerError('error.cannot-modify-role', { roleCode: role.code });
         }
         const targetChannels = input.channelIds
             ? await this.getPermittedChannels(ctx, input.channelIds)
@@ -222,7 +300,7 @@ export class RoleService {
                 input.permissions,
             );
         }
-        const updatedRole = patchEntity(role, {
+        patchEntity(role, {
             code: input.code,
             description: input.description,
             permissions: input.permissions
@@ -230,11 +308,12 @@ export class RoleService {
                 : undefined,
         });
         if (targetChannels) {
-            updatedRole.channels = targetChannels;
+            role.channels = targetChannels;
         }
-        await this.connection.getRepository(ctx, Role).save(updatedRole, { reload: false });
-        this.eventBus.publish(new RoleEvent(ctx, role, 'updated', input));
-        return await assertFound(this.findOne(ctx, role.id));
+        await this.connection.getRepository(ctx, Role).save(role, { reload: false });
+        const updatedRole = await assertFound(this.findOne(ctx, role.id));
+        await this.eventBus.publish(new RoleEvent(ctx, updatedRole, 'updated', input));
+        return updatedRole;
     }
 
     async delete(ctx: RequestContext, id: ID): Promise<DeletionResponse> {
@@ -243,11 +322,11 @@ export class RoleService {
             throw new EntityNotFoundError('Role', id);
         }
         if (role.code === SUPER_ADMIN_ROLE_CODE || role.code === CUSTOMER_ROLE_CODE) {
-            throw new InternalServerError(`error.cannot-delete-role`, { roleCode: role.code });
+            throw new InternalServerError('error.cannot-delete-role', { roleCode: role.code });
         }
         const deletedRole = new Role(role);
         await this.connection.getRepository(ctx, Role).remove(role);
-        this.eventBus.publish(new RoleEvent(ctx, deletedRole, 'deleted', id));
+        await this.eventBus.publish(new RoleEvent(ctx, deletedRole, 'deleted', id));
         return {
             result: DeletionResult.DELETED,
         };
@@ -334,7 +413,7 @@ export class RoleService {
             const superAdminRole = await this.getSuperAdminRole();
             superAdminRole.permissions = assignablePermissions;
             await this.connection.rawConnection.getRepository(Role).save(superAdminRole, { reload: false });
-        } catch (err) {
+        } catch (err: any) {
             const defaultChannel = await this.channelService.getDefaultChannel();
             await this.createRoleForChannels(
                 RequestContext.empty(),
@@ -354,7 +433,7 @@ export class RoleService {
     private async ensureCustomerRoleExists() {
         try {
             await this.getCustomerRole();
-        } catch (err) {
+        } catch (err: any) {
             const defaultChannel = await this.channelService.getDefaultChannel();
             await this.createRoleForChannels(
                 RequestContext.empty(),

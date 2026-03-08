@@ -17,7 +17,7 @@ export type ApplyCollectionFilterFn<T extends ConfigArgs> = (
 export interface CollectionFilterConfig<T extends ConfigArgs> extends ConfigurableOperationDefOptions<T> {
     apply: ApplyCollectionFilterFn<T>;
 }
-// tslint:disable:max-line-length
+/* eslint-disable max-len */
 /**
  * @description
  * A CollectionFilter defines a rule which can be used to associate ProductVariants with a Collection.
@@ -25,12 +25,12 @@ export interface CollectionFilterConfig<T extends ConfigArgs> extends Configurab
  * [`QueryBuilder`](https://typeorm.io/#/select-query-builder) object to which clauses may be added.
  *
  * Creating a CollectionFilter is considered an advanced Vendure topic. For more insight into how
- * they work, study the [default collection filters](https://github.com/vendure-ecommerce/vendure/blob/master/packages/core/src/config/catalog/default-collection-filters.ts)
+ * they work, study the [default collection filters](https://github.com/vendurehq/vendure/blob/master/packages/core/src/config/catalog/default-collection-filters.ts)
  *
  * Here's a simple example of a custom CollectionFilter:
  *
  * @example
- * ```TypeScript
+ * ```ts
  * import { CollectionFilter, LanguageCode } from '\@vendure/core';
  *
  * export const skuCollectionFilter = new CollectionFilter({
@@ -62,7 +62,7 @@ export interface CollectionFilterConfig<T extends ConfigArgs> extends Configurab
  * @docsCategory configuration
  */
 export class CollectionFilter<T extends ConfigArgs = ConfigArgs> extends ConfigurableOperationDef<T> {
-    // tslint:enable:max-line-length
+    /* eslint-enable max-len */
     private readonly applyFn: ApplyCollectionFilterFn<T>;
     constructor(config: CollectionFilterConfig<T>) {
         super(config);

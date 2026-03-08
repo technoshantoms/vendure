@@ -1,44 +1,36 @@
-/* tslint:disable:no-non-null-assertion */
-import { facetValueCollectionFilter, JobQueueService } from '@vendure/core';
+/* eslint-disable @typescript-eslint/no-non-null-assertion */
+import { LanguageCode } from '@vendure/common/lib/generated-types';
+import { facetValueCollectionFilter } from '@vendure/core';
 import { createTestEnvironment } from '@vendure/testing';
-import gql from 'graphql-tag';
-import path from 'path';
+import * as path from 'path';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { initialData } from '../../../e2e-common/e2e-initial-data';
-import { testConfig, TEST_SETUP_TIMEOUT_MS } from '../../../e2e-common/test-config';
+import { TEST_SETUP_TIMEOUT_MS, testConfig } from '../../../e2e-common/test-config';
 
+import { disableProductDocument } from './graphql/admin-definitions';
+import { ResultOf } from './graphql/graphql-admin';
 import {
-    CreateCollection,
-    CreateFacet,
-    DisableProduct,
-    FacetWithValues,
-    GetCollection,
-    GetCollectionList,
-    GetCollectionVariants,
-    GetFacetList,
-    GetProduct1,
-    GetProduct2Variants,
-    GetProductCollection,
-    GetProductFacetValues,
-    GetProductSimple,
-    GetProductsTake3,
-    GetProductWithVariants,
-    GetVariantFacetValues,
-    LanguageCode,
-    UpdateCollection,
-    UpdateProduct,
-    UpdateProductVariants,
-} from './graphql/generated-e2e-admin-types';
-import {
-    CREATE_COLLECTION,
-    CREATE_FACET,
-    GET_FACET_LIST,
-    GET_PRODUCT_SIMPLE,
-    GET_PRODUCT_WITH_VARIANTS,
-    UPDATE_COLLECTION,
-    UPDATE_PRODUCT,
-    UPDATE_PRODUCT_VARIANTS,
+    createCollectionDocument,
+    createFacetDocument,
+    getFacetListDocument,
+    getProductSimpleDocument,
+    getProductWithVariantsDocument,
+    updateCollectionDocument,
+    updateProductDocument,
+    updateProductVariantsDocument,
 } from './graphql/shared-definitions';
+import {
+    getCollectionListDocument,
+    getCollectionShopDocument,
+    getCollectionVariantsDocument,
+    getProduct1Document,
+    getProduct2VariantsDocument,
+    getProductCollectionDocument,
+    getProductFacetValuesDocument,
+    getProductsTake3Document,
+    getProductVariantFacetValuesDocument,
+} from './graphql/shop-definitions';
 import { assertThrowsWithMessage } from './utils/assert-throws-with-message';
 import { awaitRunningJobs } from './utils/await-running-jobs';
 
@@ -61,50 +53,33 @@ describe('Shop catalog', () => {
     describe('products', () => {
         beforeAll(async () => {
             // disable the first product
-            await adminClient.query<DisableProduct.Mutation, DisableProduct.Variables>(DISABLE_PRODUCT, {
+            await adminClient.query(disableProductDocument, {
                 id: 'T_1',
             });
 
-            const monitorProduct = await adminClient.query<
-                GetProductWithVariants.Query,
-                GetProductWithVariants.Variables
-            >(GET_PRODUCT_WITH_VARIANTS, {
+            const monitorProduct = await adminClient.query(getProductWithVariantsDocument, {
                 id: 'T_2',
             });
             if (monitorProduct.product) {
-                await adminClient.query<UpdateProductVariants.Mutation, UpdateProductVariants.Variables>(
-                    UPDATE_PRODUCT_VARIANTS,
-                    {
-                        input: [
-                            {
-                                id: monitorProduct.product.variants[0].id,
-                                enabled: false,
-                            },
-                        ],
-                    },
-                );
+                await adminClient.query(updateProductVariantsDocument, {
+                    input: [
+                        {
+                            id: monitorProduct.product.variants[0].id,
+                            enabled: false,
+                        },
+                    ],
+                });
             }
         });
 
         it('products list omits disabled products', async () => {
-            const result = await shopClient.query<GetProductsTake3.Query>(gql`
-                query GetProductsTake3 {
-                    products(options: { take: 3 }) {
-                        items {
-                            id
-                        }
-                    }
-                }
-            `);
+            const result = await shopClient.query(getProductsTake3Document);
 
             expect(result.products.items.map(item => item.id).sort()).toEqual(['T_2', 'T_3', 'T_4']);
         });
 
         it('by id', async () => {
-            const { product } = await shopClient.query<GetProductSimple.Query, GetProductSimple.Variables>(
-                GET_PRODUCT_SIMPLE,
-                { id: 'T_2' },
-            );
+            const { product } = await shopClient.query(getProductSimpleDocument, { id: 'T_2' });
 
             if (!product) {
                 fail('Product not found');
@@ -114,10 +89,7 @@ describe('Shop catalog', () => {
         });
 
         it('by slug', async () => {
-            const { product } = await shopClient.query<GetProductSimple.Query, GetProductSimple.Variables>(
-                GET_PRODUCT_SIMPLE,
-                { slug: 'curvy-monitor' },
-            );
+            const { product } = await shopClient.query(getProductSimpleDocument, { slug: 'curvy-monitor' });
 
             if (!product) {
                 fail('Product not found');
@@ -129,89 +101,61 @@ describe('Shop catalog', () => {
         it(
             'throws if neither id nor slug provided',
             assertThrowsWithMessage(async () => {
-                await shopClient.query<GetProductSimple.Query, GetProductSimple.Variables>(
-                    GET_PRODUCT_SIMPLE,
-                    {},
-                );
+                await shopClient.query(getProductSimpleDocument, {});
             }, 'Either the Product id or slug must be provided'),
         );
 
         it('product returns null for disabled product', async () => {
-            const result = await shopClient.query<GetProduct1.Query>(gql`
-                query GetProduct1 {
-                    product(id: "T_1") {
-                        id
-                    }
-                }
-            `);
+            const result = await shopClient.query(getProduct1Document);
 
             expect(result.product).toBeNull();
         });
 
         it('omits disabled variants from product response', async () => {
-            const result = await shopClient.query<GetProduct2Variants.Query>(gql`
-                query GetProduct2Variants {
-                    product(id: "T_2") {
-                        id
-                        variants {
-                            id
-                            name
-                        }
-                    }
-                }
-            `);
+            const result = await shopClient.query(getProduct2VariantsDocument);
 
             expect(result.product!.variants).toEqual([{ id: 'T_6', name: 'Curvy Monitor 27 inch' }]);
         });
     });
 
     describe('facets', () => {
-        let facetValue: FacetWithValues.Values;
+        let facetValue: ResultOf<typeof createFacetDocument>['createFacet']['values'][number];
 
         beforeAll(async () => {
-            const result = await adminClient.query<CreateFacet.Mutation, CreateFacet.Variables>(
-                CREATE_FACET,
-                {
-                    input: {
-                        code: 'profit-margin',
-                        isPrivate: true,
-                        translations: [{ languageCode: LanguageCode.en, name: 'Profit Margin' }],
-                        values: [
-                            {
-                                code: 'massive',
-                                translations: [{ languageCode: LanguageCode.en, name: 'massive' }],
-                            },
-                        ],
-                    },
+            const result = await adminClient.query(createFacetDocument, {
+                input: {
+                    code: 'profit-margin',
+                    isPrivate: true,
+                    translations: [{ languageCode: LanguageCode.en, name: 'Profit Margin' }],
+                    values: [
+                        {
+                            code: 'massive',
+                            translations: [{ languageCode: LanguageCode.en, name: 'massive' }],
+                        },
+                    ],
                 },
-            );
+            });
             facetValue = result.createFacet.values[0];
 
-            await adminClient.query<UpdateProduct.Mutation, UpdateProduct.Variables>(UPDATE_PRODUCT, {
+            await adminClient.query(updateProductDocument, {
                 input: {
                     id: 'T_2',
                     facetValueIds: [facetValue.id],
                 },
             });
 
-            await adminClient.query<UpdateProductVariants.Mutation, UpdateProductVariants.Variables>(
-                UPDATE_PRODUCT_VARIANTS,
-                {
-                    input: [
-                        {
-                            id: 'T_6',
-                            facetValueIds: [facetValue.id],
-                        },
-                    ],
-                },
-            );
+            await adminClient.query(updateProductVariantsDocument, {
+                input: [
+                    {
+                        id: 'T_6',
+                        facetValueIds: [facetValue.id],
+                    },
+                ],
+            });
         });
 
         it('omits private Product.facetValues', async () => {
-            const result = await shopClient.query<
-                GetProductFacetValues.Query,
-                GetProductFacetValues.Variables
-            >(GET_PRODUCT_FACET_VALUES, {
+            const result = await shopClient.query(getProductFacetValuesDocument, {
                 id: 'T_2',
             });
 
@@ -219,10 +163,7 @@ describe('Shop catalog', () => {
         });
 
         it('omits private ProductVariant.facetValues', async () => {
-            const result = await shopClient.query<
-                GetVariantFacetValues.Query,
-                GetVariantFacetValues.Variables
-            >(GET_PRODUCT_VARIANT_FACET_VALUES, {
+            const result = await shopClient.query(getProductVariantFacetValuesDocument, {
                 id: 'T_2',
             });
 
@@ -231,37 +172,31 @@ describe('Shop catalog', () => {
     });
 
     describe('collections', () => {
-        let collection: CreateCollection.CreateCollection;
+        let collection: ResultOf<typeof createCollectionDocument>['createCollection'];
 
         async function createNewCollection(name: string, isPrivate: boolean, parentId?: string) {
-            return await adminClient.query<CreateCollection.Mutation, CreateCollection.Variables>(
-                CREATE_COLLECTION,
-                {
-                    input: {
-                        translations: [
-                            {
-                                languageCode: LanguageCode.en,
-                                name,
-                                description: '',
-                                slug: name,
-                            },
-                        ],
-                        isPrivate,
-                        parentId,
-                        filters: [],
-                    },
+            return await adminClient.query(createCollectionDocument, {
+                input: {
+                    translations: [
+                        {
+                            languageCode: LanguageCode.en,
+                            name,
+                            description: '',
+                            slug: name,
+                        },
+                    ],
+                    isPrivate,
+                    parentId,
+                    filters: [],
                 },
-            );
+            });
         }
 
         beforeAll(async () => {
-            const result = await adminClient.query<GetFacetList.Query>(GET_FACET_LIST);
+            const result = await adminClient.query(getFacetListDocument);
             const category = result.facets.items[0];
             const sportsEquipment = category.values.find(v => v.code === 'sports-equipment')!;
-            const { createCollection } = await adminClient.query<
-                CreateCollection.Mutation,
-                CreateCollection.Variables
-            >(CREATE_COLLECTION, {
+            const { createCollection } = await adminClient.query(createCollectionDocument, {
                 input: {
                     filters: [
                         {
@@ -273,7 +208,7 @@ describe('Shop catalog', () => {
                                 },
                                 {
                                     name: 'containsAny',
-                                    value: `false`,
+                                    value: 'false',
                                 },
                             ],
                         },
@@ -293,10 +228,7 @@ describe('Shop catalog', () => {
         });
 
         it('returns collection with variants', async () => {
-            const result = await shopClient.query<
-                GetCollectionVariants.Query,
-                GetCollectionVariants.Variables
-            >(GET_COLLECTION_VARIANTS, { id: collection.id });
+            const result = await shopClient.query(getCollectionVariantsDocument, { id: collection.id });
             expect(result.collection!.productVariants.items).toEqual([
                 { id: 'T_22', name: 'Road Bike' },
                 { id: 'T_23', name: 'Skipping Rope' },
@@ -312,23 +244,17 @@ describe('Shop catalog', () => {
         });
 
         it('collection by slug', async () => {
-            const result = await shopClient.query<
-                GetCollectionVariants.Query,
-                GetCollectionVariants.Variables
-            >(GET_COLLECTION_VARIANTS, { slug: collection.slug });
+            const result = await shopClient.query(getCollectionVariantsDocument, { slug: collection.slug });
             expect(result.collection?.id).toBe(collection.id);
         });
 
         it('omits variants from disabled products', async () => {
-            await adminClient.query<DisableProduct.Mutation, DisableProduct.Variables>(DISABLE_PRODUCT, {
+            await adminClient.query(disableProductDocument, {
                 id: 'T_17',
             });
             await awaitRunningJobs(adminClient);
 
-            const result = await shopClient.query<
-                GetCollectionVariants.Query,
-                GetCollectionVariants.Variables
-            >(GET_COLLECTION_VARIANTS, { id: collection.id });
+            const result = await shopClient.query(getCollectionVariantsDocument, { id: collection.id });
             expect(result.collection!.productVariants.items).toEqual([
                 { id: 'T_22', name: 'Road Bike' },
                 { id: 'T_23', name: 'Skipping Rope' },
@@ -340,18 +266,12 @@ describe('Shop catalog', () => {
         });
 
         it('omits disabled product variants', async () => {
-            await adminClient.query<UpdateProductVariants.Mutation, UpdateProductVariants.Variables>(
-                UPDATE_PRODUCT_VARIANTS,
-                {
-                    input: [{ id: 'T_22', enabled: false }],
-                },
-            );
+            await adminClient.query(updateProductVariantsDocument, {
+                input: [{ id: 'T_22', enabled: false }],
+            });
             await awaitRunningJobs(adminClient);
 
-            const result = await shopClient.query<
-                GetCollectionVariants.Query,
-                GetCollectionVariants.Variables
-            >(GET_COLLECTION_VARIANTS, { id: collection.id });
+            const result = await shopClient.query(getCollectionVariantsDocument, { id: collection.id });
             expect(result.collection!.productVariants.items).toEqual([
                 { id: 'T_23', name: 'Skipping Rope' },
                 { id: 'T_24', name: 'Boxing Gloves' },
@@ -362,7 +282,7 @@ describe('Shop catalog', () => {
         });
 
         it('collection list', async () => {
-            const result = await shopClient.query<GetCollectionList.Query>(GET_COLLECTION_LIST);
+            const result = await shopClient.query(getCollectionListDocument);
 
             expect(result.collections.items).toEqual([
                 { id: 'T_2', name: 'Plants' },
@@ -371,41 +291,26 @@ describe('Shop catalog', () => {
         });
 
         it('omits private collections', async () => {
-            await adminClient.query<UpdateCollection.Mutation, UpdateCollection.Variables>(
-                UPDATE_COLLECTION,
-                {
-                    input: {
-                        id: collection.id,
-                        isPrivate: true,
-                    },
+            await adminClient.query(updateCollectionDocument, {
+                input: {
+                    id: collection.id,
+                    isPrivate: true,
                 },
-            );
+            });
             await awaitRunningJobs(adminClient);
-            const result = await shopClient.query<GetCollectionList.Query>(GET_COLLECTION_LIST);
+            const result = await shopClient.query(getCollectionListDocument);
 
             expect(result.collections.items).toEqual([{ id: 'T_2', name: 'Plants' }]);
         });
 
         it('returns null for private collection', async () => {
-            const result = await shopClient.query<
-                GetCollectionVariants.Query,
-                GetCollectionVariants.Variables
-            >(GET_COLLECTION_VARIANTS, { id: collection.id });
+            const result = await shopClient.query(getCollectionVariantsDocument, { id: collection.id });
 
             expect(result.collection).toBeNull();
         });
 
         it('product.collections list omits private collections', async () => {
-            const result = await shopClient.query<GetProductCollection.Query>(gql`
-                query GetProductCollection {
-                    product(id: "T_12") {
-                        collections {
-                            id
-                            name
-                        }
-                    }
-                }
-            `);
+            const result = await shopClient.query(getProductCollectionDocument);
 
             expect(result.product!.collections).toEqual([]);
         });
@@ -414,12 +319,9 @@ describe('Shop catalog', () => {
             const { createCollection: parent } = await createNewCollection('public-parent', false);
             const { createCollection: child } = await createNewCollection('private-child', true, parent.id);
 
-            const result = await shopClient.query<GetCollection.Query, GetCollection.Variables>(
-                GET_COLLECTION_SHOP,
-                {
-                    id: parent.id,
-                },
-            );
+            const result = await shopClient.query(getCollectionShopDocument, {
+                id: parent.id,
+            });
 
             expect(result.collection?.children).toEqual([]);
         });
@@ -428,93 +330,11 @@ describe('Shop catalog', () => {
             const { createCollection: parent } = await createNewCollection('private-parent', true);
             const { createCollection: child } = await createNewCollection('public-child', false, parent.id);
 
-            const result = await shopClient.query<GetCollection.Query, GetCollection.Variables>(
-                GET_COLLECTION_SHOP,
-                {
-                    id: child.id,
-                },
-            );
+            const result = await shopClient.query(getCollectionShopDocument, {
+                id: child.id,
+            });
 
             expect(result.collection?.parent).toBeNull();
         });
     });
 });
-
-const GET_COLLECTION_SHOP = gql`
-    query GetCollectionShop($id: ID, $slug: String) {
-        collection(id: $id, slug: $slug) {
-            id
-            name
-            slug
-            description
-            parent {
-                id
-                name
-            }
-            children {
-                id
-                name
-            }
-        }
-    }
-`;
-
-const DISABLE_PRODUCT = gql`
-    mutation DisableProduct($id: ID!) {
-        updateProduct(input: { id: $id, enabled: false }) {
-            id
-        }
-    }
-`;
-
-const GET_COLLECTION_VARIANTS = gql`
-    query GetCollectionVariants($id: ID, $slug: String) {
-        collection(id: $id, slug: $slug) {
-            id
-            productVariants {
-                items {
-                    id
-                    name
-                }
-            }
-        }
-    }
-`;
-
-const GET_COLLECTION_LIST = gql`
-    query GetCollectionList {
-        collections {
-            items {
-                id
-                name
-            }
-        }
-    }
-`;
-
-const GET_PRODUCT_FACET_VALUES = gql`
-    query GetProductFacetValues($id: ID!) {
-        product(id: $id) {
-            id
-            name
-            facetValues {
-                name
-            }
-        }
-    }
-`;
-
-const GET_PRODUCT_VARIANT_FACET_VALUES = gql`
-    query GetVariantFacetValues($id: ID!) {
-        product(id: $id) {
-            id
-            name
-            variants {
-                id
-                facetValues {
-                    name
-                }
-            }
-        }
-    }
-`;

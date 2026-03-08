@@ -1,5 +1,5 @@
 import { ChangeDetectionStrategy, Component, Input } from '@angular/core';
-import { FormControl } from '@angular/forms';
+import { UntypedFormControl } from '@angular/forms';
 import { DefaultFormComponentConfig, DefaultFormComponentId } from '@vendure/common/lib/shared-types';
 import { Observable } from 'rxjs';
 
@@ -19,17 +19,18 @@ import { DataService } from '../../../data/providers/data.service';
     templateUrl: './currency-form-input.component.html',
     styleUrls: ['./currency-form-input.component.scss'],
     changeDetection: ChangeDetectionStrategy.OnPush,
+    standalone: false,
 })
 export class CurrencyFormInputComponent implements FormInputComponent {
     static readonly id: DefaultFormComponentId = 'currency-form-input';
     @Input() readonly: boolean;
-    formControl: FormControl;
+    formControl: UntypedFormControl;
     currencyCode$: Observable<CurrencyCode>;
     config: DefaultFormComponentConfig<'currency-form-input'>;
 
     constructor(private dataService: DataService) {
         this.currencyCode$ = this.dataService.settings
             .getActiveChannel()
-            .mapStream(data => data.activeChannel.currencyCode);
+            .mapStream(data => data.activeChannel.defaultCurrencyCode);
     }
 }

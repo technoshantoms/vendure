@@ -9,9 +9,8 @@ import {
     ConfigurableOperationDefOptions,
 } from '../../common/configurable-operation';
 import { Promotion, PromotionState } from '../../entity';
-import { OrderItem } from '../../entity/order-item/order-item.entity';
-import { OrderLine } from '../../entity/order-line/order-line.entity';
 import { Order } from '../../entity/order/order.entity';
+import { OrderLine } from '../../entity/order-line/order-line.entity';
 import { ShippingLine } from '../../entity/shipping-line/shipping-line.entity';
 
 import { PromotionCondition } from './promotion-condition';
@@ -65,14 +64,29 @@ export type ConditionState<
 /**
  * @description
  * The function which is used by a PromotionItemAction to calculate the
- * discount on the OrderItem.
+ * discount on the OrderLine for each item.
  *
  * @docsCategory promotions
  * @docsPage promotion-action
  */
 export type ExecutePromotionItemActionFn<T extends ConfigArgs, U extends Array<PromotionCondition<any>>> = (
     ctx: RequestContext,
-    orderItem: OrderItem,
+    orderLine: OrderLine,
+    args: ConfigArgValues<T>,
+    state: ConditionState<U>,
+    promotion: Promotion,
+) => number | Promise<number>;
+
+/**
+ * @description
+ * The function which is used by a PromotionLineAction to calculate the
+ * discount on the OrderLine.
+ *
+ * @docsCategory promotions
+ * @docsPage promotion-action
+ */
+export type ExecutePromotionLineActionFn<T extends ConfigArgs, U extends Array<PromotionCondition<any>>> = (
+    ctx: RequestContext,
     orderLine: OrderLine,
     args: ConfigArgValues<T>,
     state: ConditionState<U>,
@@ -198,9 +212,27 @@ export interface PromotionItemActionConfig<T extends ConfigArgs, U extends Promo
      * @description
      * The function which contains the promotion calculation logic.
      * Should resolve to a number which represents the amount by which to discount
-     * the OrderItem, i.e. the number should be negative.
+     * the OrderLine, i.e. the number should be negative.
      */
     execute: ExecutePromotionItemActionFn<T, U>;
+}
+
+/**
+ * @description
+ * Configuration for a {@link PromotionLineAction}
+ *
+ * @docsCategory promotions
+ * @docsPage promotion-action
+ */
+export interface PromotionLineActionConfig<T extends ConfigArgs, U extends PromotionCondition[]>
+    extends PromotionActionConfig<T, U> {
+    /**
+     * @description
+     * The function which contains the promotion calculation logic.
+     * Should resolve to a number which represents the amount by which to discount
+     * the OrderLine, i.e. the number should be negative.
+     */
+    execute: ExecutePromotionLineActionFn<T, U>;
 }
 
 /**
@@ -247,7 +279,7 @@ export interface PromotionShippingActionConfig<T extends ConfigArgs, U extends P
  * @docsWeight 0
  */
 export abstract class PromotionAction<
-    T extends ConfigArgs = {},
+    T extends ConfigArgs = ConfigArgs,
     U extends PromotionCondition[] | undefined = any,
 > extends ConfigurableOperationDef<T> {
     /**
@@ -300,15 +332,15 @@ export abstract class PromotionAction<
 
 /**
  * @description
- * Represents a PromotionAction which applies to individual {@link OrderItem}s.
+ * Represents a PromotionAction which applies to individual {@link OrderLine}s.
  *
  * @example
  * ```ts
- * // Applies a percentage discount to each OrderItem
+ * // Applies a percentage discount to each OrderLine
  * const itemPercentageDiscount = new PromotionItemAction({
  *     code: 'item_percentage_discount',
  *     args: { discount: 'percentage' },
- *     execute(ctx, orderItem, orderLine, args) {
+ *     execute(ctx, orderLine, args) {
  *         return -orderLine.unitPrice * (args.discount / 100);
  *     },
  *     description: 'Discount every item by { discount }%',
@@ -332,7 +364,6 @@ export class PromotionItemAction<
     /** @internal */
     execute(
         ctx: RequestContext,
-        orderItem: OrderItem,
         orderLine: OrderLine,
         args: ConfigArg[],
         state: PromotionState,
@@ -346,7 +377,61 @@ export class PromotionItemAction<
             : {};
         return this.executeFn(
             ctx,
-            orderItem,
+            orderLine,
+            this.argsArrayToHash(args),
+            actionState as ConditionState<U>,
+            promotion,
+        );
+    }
+}
+
+/**
+ * @description
+ * Represents a PromotionAction which applies to individual {@link OrderLine}s.
+ * The difference from PromotionItemAction is that it applies regardless of the Quantity of the OrderLine.
+ *
+ * @example
+ * ```ts
+ * // Applies a percentage discount to each OrderLine
+ * const linePercentageDiscount = new PromotionLineAction({
+ *     code: 'line_percentage_discount',
+ *     args: { discount: 'percentage' },
+ *     execute(ctx, orderLine, args) {
+ *         return -orderLine.linePrice * (args.discount / 100);
+ *     },
+ *     description: 'Discount every line by { discount }%',
+ * });
+ * ```
+ *
+ * @docsCategory promotions
+ * @docsPage promotion-action
+ */
+export class PromotionLineAction<
+    T extends ConfigArgs = ConfigArgs,
+    U extends Array<PromotionCondition<any>> = [],
+> extends PromotionAction<T, U> {
+    private readonly executeFn: ExecutePromotionLineActionFn<T, U>;
+    constructor(config: PromotionLineActionConfig<T, U>) {
+        super(config);
+        this.executeFn = config.execute;
+    }
+
+    /** @internal */
+    execute(
+        ctx: RequestContext,
+        orderLine: OrderLine,
+        args: ConfigArg[],
+        state: PromotionState,
+        promotion: Promotion,
+    ) {
+        const actionState = this.conditions
+            ? pick(
+                  state,
+                  this.conditions.map(c => c.code),
+              )
+            : {};
+        return this.executeFn(
+            ctx,
             orderLine,
             this.argsArrayToHash(args),
             actionState as ConditionState<U>,

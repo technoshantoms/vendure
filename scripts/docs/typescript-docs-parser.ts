@@ -1,9 +1,10 @@
 import fs from 'fs';
 import path from 'path';
-import ts, { HeritageClause, JSDocTag, SyntaxKind } from 'typescript';
+import ts, { HeritageClause, JSDocTag, Modifier, NodeArray, SyntaxKind } from 'typescript';
 
 import { notNullOrUndefined } from '../../packages/common/src/shared-utils';
 
+import { normalizeForUrlPart } from './docgen-utils';
 import {
     DocsPage,
     MemberInfo,
@@ -20,6 +21,7 @@ import {
  */
 export class TypescriptDocsParser {
     private readonly atTokenPlaceholder = '__EscapedAtToken__';
+    private readonly commentBlockEndTokenPlaceholder = '__EscapedCommentBlockEndToken__';
 
     /**
      * Parses the TypeScript files given by the filePaths array and returns the
@@ -29,7 +31,7 @@ export class TypescriptDocsParser {
         const sourceFiles = filePaths.map(filePath => {
             return ts.createSourceFile(
                 filePath,
-                this.replaceEscapedAtTokens(fs.readFileSync(filePath).toString()),
+                this.replaceEscapedTokens(fs.readFileSync(filePath).toString()),
                 ts.ScriptTarget.ES2015,
                 true,
             );
@@ -53,11 +55,12 @@ export class TypescriptDocsParser {
                 if (existingPage) {
                     existingPage.declarations.push(declaration);
                 } else {
-                    const normalizedTitle = this.kebabCase(pageTitle);
-                    const fileName = normalizedTitle === declaration.category ? '_index' : normalizedTitle;
+                    const normalizedTitle = normalizeForUrlPart(pageTitle);
+                    const categoryLastPart = declaration.category.split('/').pop();
+                    const fileName = normalizedTitle === categoryLastPart ? 'index' : normalizedTitle;
                     pages.set(pageTitle, {
                         title: pageTitle,
-                        category: declaration.category,
+                        category: declaration.category.split('/'),
                         declarations: [declaration],
                         fileName,
                     });
@@ -75,14 +78,19 @@ export class TypescriptDocsParser {
     private getStatementsWithSourceLocation(
         sourceFiles: ts.SourceFile[],
     ): Array<{ statement: ts.Statement; sourceFile: string; sourceLine: number }> {
-        return sourceFiles.reduce((st, sf) => {
-            const statementsWithSources = sf.statements.map(statement => {
-                const sourceFile = path.relative(path.join(__dirname, '..'), sf.fileName).replace(/\\/g, '/');
-                const sourceLine = sf.getLineAndCharacterOfPosition(statement.getStart()).line + 1;
-                return { statement, sourceFile, sourceLine };
-            });
-            return [...st, ...statementsWithSources];
-        }, [] as Array<{ statement: ts.Statement; sourceFile: string; sourceLine: number }>);
+        return sourceFiles.reduce(
+            (st, sf) => {
+                const statementsWithSources = sf.statements.map(statement => {
+                    const sourceFile = path
+                        .relative(path.join(__dirname, '..'), sf.fileName)
+                        .replace(/\\/g, '/');
+                    const sourceLine = sf.getLineAndCharacterOfPosition(statement.getStart()).line + 1;
+                    return { statement, sourceFile, sourceLine };
+                });
+                return [...st, ...statementsWithSources];
+            },
+            [] as Array<{ statement: ts.Statement; sourceFile: string; sourceLine: number }>,
+        );
     }
 
     /**
@@ -155,16 +163,25 @@ export class TypescriptDocsParser {
         } else if (ts.isEnumDeclaration(statement)) {
             return {
                 ...info,
-                kind: 'enum' as 'enum',
+                kind: 'enum' as const,
                 members: this.parseMembers(statement.members) as PropertyInfo[],
             };
         } else if (ts.isFunctionDeclaration(statement)) {
-            const parameters = statement.parameters.map(p => ({
-                name: p.name.getText(),
-                type: p.type ? p.type.getText() : '',
-                optional: !!p.questionToken,
-                initializer: p.initializer && p.initializer.getText(),
-            }));
+            const parameters = statement.parameters.map(p => {
+                let name = p.name.getText();
+                if (name.startsWith('{') && name.endsWith('}') && info.sourceFile.endsWith('.tsx')) {
+                    // The "name" of a React component is often a destructured object, e.g. `{ prod1, prop2 }` etc.
+                    // In this case we will simply replace that with "props".
+                    name = 'props';
+                }
+                return {
+                    name,
+                    type: p.type ? p.type.getText() : '',
+                    optional: !!p.questionToken,
+                    initializer: p.initializer && p.initializer.getText(),
+                }
+            });
+
             return {
                 ...info,
                 kind: 'function',
@@ -234,9 +251,11 @@ export class TypescriptDocsParser {
         members: ts.NodeArray<ts.TypeElement | ts.ClassElement | ts.EnumMember>,
     ): Array<PropertyInfo | MethodInfo> {
         const result: Array<PropertyInfo | MethodInfo> = [];
+        const hasModifiers = (member: any): member is { modifiers: NodeArray<Modifier> } =>
+            Array.isArray(member.modifiers);
 
         for (const member of members) {
-            const modifiers = member.modifiers ? member.modifiers.map(m => m.getText()) : [];
+            const modifiers = hasModifiers(member) ? member.modifiers.map(m => m.getText()) : [];
             const isPrivate = modifiers.includes('private');
             if (
                 !isPrivate &&
@@ -252,8 +271,8 @@ export class TypescriptDocsParser {
                 const name = member.name
                     ? member.name.getText()
                     : ts.isIndexSignatureDeclaration(member)
-                    ? '[index]'
-                    : 'constructor';
+                      ? '[index]'
+                      : 'constructor';
                 let description = '';
                 let type = '';
                 let defaultValue = '';
@@ -288,8 +307,8 @@ export class TypescriptDocsParser {
                 const memberInfo: MemberInfo = {
                     fullText,
                     name,
-                    description: this.restoreAtTokens(description),
-                    type,
+                    description: this.restoreTokens(description),
+                    type: type.replace(/`/g, '\\`'),
                     modifiers,
                     since,
                     experimental,
@@ -383,7 +402,7 @@ export class TypescriptDocsParser {
             description: comment => (description += comment),
             example: comment => (description += this.formatExampleCode(comment)),
         });
-        return this.restoreAtTokens(description);
+        return this.restoreTokens(description);
     }
 
     /**
@@ -394,7 +413,7 @@ export class TypescriptDocsParser {
         this.parseTags(statement, {
             docsCategory: comment => (category = comment || ''),
         });
-        return this.kebabCase(category);
+        return normalizeForUrlPart(category);
     }
 
     /**
@@ -434,32 +453,29 @@ export class TypescriptDocsParser {
         return '\n\n*Example*\n\n' + example.replace(/\r/g, '');
     }
 
-    private kebabCase<T extends string | undefined>(input: T): T {
-        if (input == null) {
-            return input;
-        }
-        return input
-            .replace(/([a-z])([A-Z])/g, '$1-$2')
-            .replace(/\s+/g, '-')
-            .toLowerCase() as T;
-    }
-
     /**
      * TypeScript from v3.5.1 interprets all '@' tokens in a tag comment as a new tag. This is a problem e.g.
-     * when a plugin includes in it's description some text like "install the @vendure/some-plugin package". Here,
+     * when a plugin includes in its description some text like "install the @vendure/some-plugin package". Here,
      * TypeScript will interpret "@vendure" as a JSDoc tag and remove it and all remaining text from the comment.
      *
      * The solution is to replace all escaped @ tokens ("\@") with a replacer string so that TypeScript treats them
      * as regular comment text, and then once it has parsed the statement, we replace them with the "@" character.
+     *
+     * Similarly, '/*' is interpreted as end of a comment block. However, it can be useful to specify a globstar
+     * pattern in descriptions and therefore it is supported as long as the leading '/' is escaped ("\/").
      */
-    private replaceEscapedAtTokens(content: string): string {
-        return content.replace(/\\@/g, this.atTokenPlaceholder);
+    private replaceEscapedTokens(content: string): string {
+        return content
+            .replace(/\\@/g, this.atTokenPlaceholder)
+            .replace(/\\\/\*/g, this.commentBlockEndTokenPlaceholder);
     }
 
     /**
-     * Restores "@" tokens which were replaced by the replaceEscapedAtTokens() method.
+     * Restores "@" and "/*" tokens which were replaced by the replaceEscapedTokens() method.
      */
-    private restoreAtTokens(content: string): string {
-        return content.replace(new RegExp(this.atTokenPlaceholder, 'g'), '@');
+    private restoreTokens(content: string): string {
+        return content
+            .replace(new RegExp(this.atTokenPlaceholder, 'g'), '@')
+            .replace(new RegExp(this.commentBlockEndTokenPlaceholder, 'g'), '/*');
     }
 }

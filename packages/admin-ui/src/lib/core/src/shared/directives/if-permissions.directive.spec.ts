@@ -1,8 +1,6 @@
 import { Component, Input } from '@angular/core';
-import { ComponentFixture, fakeAsync, TestBed, tick } from '@angular/core/testing';
-import { of } from 'rxjs';
-
-import { DataService } from '../../data/providers/data.service';
+import { ComponentFixture, TestBed } from '@angular/core/testing';
+import { PermissionsService } from '../../providers/permissions/permissions.service';
 
 import { IfPermissionsDirective } from './if-permissions.directive';
 
@@ -12,9 +10,10 @@ describe('vdrIfPermissions directive', () => {
     beforeEach(() => {
         fixture = TestBed.configureTestingModule({
             declarations: [TestComponent, IfPermissionsDirective],
-            providers: [{ provide: DataService, useClass: MockDataService }],
         }).createComponent(TestComponent);
         fixture.detectChanges(); // initial binding
+
+        TestBed.inject(PermissionsService).setCurrentUserPermissions(['ValidPermission']);
     });
 
     it('has permission (single)', () => {
@@ -75,24 +74,8 @@ describe('vdrIfPermissions directive', () => {
         </div>
         <ng-template #noPerms><span class="else"></span></ng-template>
     `,
+    standalone: false,
 })
 export class TestComponent {
     @Input() permissionToTest: string | string[] | null = '';
-}
-
-class MockDataService {
-    client = {
-        userStatus() {
-            return {
-                mapStream: (mapFn: any) =>
-                    of(
-                        mapFn({
-                            userStatus: {
-                                permissions: ['ValidPermission'],
-                            },
-                        }),
-                    ),
-            };
-        },
-    };
 }

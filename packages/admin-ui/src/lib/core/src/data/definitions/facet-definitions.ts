@@ -18,6 +18,7 @@ export const FACET_VALUE_FRAGMENT = gql`
             createdAt
             updatedAt
             name
+            code
         }
     }
 `;
@@ -38,6 +39,30 @@ export const FACET_WITH_VALUES_FRAGMENT = gql`
         }
         values {
             ...FacetValue
+        }
+    }
+    ${FACET_VALUE_FRAGMENT}
+`;
+
+export const FACET_WITH_VALUE_LIST_FRAGMENT = gql`
+    fragment FacetWithValueList on Facet {
+        id
+        createdAt
+        updatedAt
+        languageCode
+        isPrivate
+        code
+        name
+        translations {
+            id
+            languageCode
+            name
+        }
+        valueList(options: $facetValueListOptions) {
+            totalItems
+            items {
+                ...FacetValue
+            }
         }
     }
     ${FACET_VALUE_FRAGMENT}
@@ -106,18 +131,6 @@ export const DELETE_FACET_VALUES = gql`
     }
 `;
 
-export const GET_FACET_LIST = gql`
-    query GetFacetList($options: FacetListOptions) {
-        facets(options: $options) {
-            items {
-                ...FacetWithValues
-            }
-            totalItems
-        }
-    }
-    ${FACET_WITH_VALUES_FRAGMENT}
-`;
-
 export const GET_FACET_VALUE_LIST = gql`
     query GetFacetValueList($options: FacetValueListOptions) {
         facetValues(options: $options) {
@@ -128,15 +141,6 @@ export const GET_FACET_VALUE_LIST = gql`
         }
     }
     ${FACET_VALUE_FRAGMENT}
-`;
-
-export const GET_FACET_WITH_VALUES = gql`
-    query GetFacetWithValues($id: ID!) {
-        facet(id: $id) {
-            ...FacetWithValues
-        }
-    }
-    ${FACET_WITH_VALUES_FRAGMENT}
 `;
 
 export const ASSIGN_FACETS_TO_CHANNEL = gql`

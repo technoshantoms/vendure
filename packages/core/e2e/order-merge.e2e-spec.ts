@@ -1,4 +1,4 @@
-/* tslint:disable:no-non-null-assertion */
+/* eslint-disable @typescript-eslint/no-non-null-assertion */
 import {
     mergeConfig,
     MergedOrderLine,
@@ -11,28 +11,20 @@ import {
     UseGuestStrategy,
 } from '@vendure/core';
 import { createErrorResultGuard, createTestEnvironment, ErrorResultGuard } from '@vendure/testing';
-import gql from 'graphql-tag';
-import path from 'path';
+import path from 'node:path';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { initialData } from '../../../e2e-common/e2e-initial-data';
-import { testConfig, TEST_SETUP_TIMEOUT_MS } from '../../../e2e-common/test-config';
+import { TEST_SETUP_TIMEOUT_MS, testConfig } from '../../../e2e-common/test-config';
 
+import { currentUserFragment } from './graphql/fragments-admin';
+import { FragmentOf, graphql, ResultOf, VariablesOf } from './graphql/graphql-shop';
+import { attemptLoginDocument, getCustomerListDocument } from './graphql/shared-definitions';
 import {
-    AttemptLogin,
-    AttemptLoginMutation,
-    AttemptLoginMutationVariables,
-    GetCustomerList,
-} from './graphql/generated-e2e-admin-types';
-import {
-    AddItemToOrder,
-    AddItemToOrderMutation,
-    GetActiveOrderPaymentsQuery,
-    GetNextOrderStatesQuery,
-    TestOrderFragmentFragment,
-    UpdatedOrderFragment,
-} from './graphql/generated-e2e-shop-types';
-import { ATTEMPT_LOGIN, GET_CUSTOMER_LIST } from './graphql/shared-definitions';
-import { GET_ACTIVE_ORDER_PAYMENTS, GET_NEXT_STATES, TEST_ORDER_FRAGMENT } from './graphql/shop-definitions';
+    addItemToOrderCustomFieldsDocument,
+    addItemToOrderDocument,
+    getNextStatesDocument,
+} from './graphql/shop-definitions';
 import { sortById } from './utils/test-order-utils';
 
 /**
@@ -46,17 +38,76 @@ class DelegateMergeStrategy implements OrderMergeStrategy {
     }
 }
 
-type AddItemToOrderWithCustomFields = AddItemToOrder.Variables & {
+type AddItemToOrderWithCustomFields = VariablesOf<typeof addItemToOrderDocument> & {
     customFields?: { inscription?: string };
 };
 
+const getActiveOrderWithCustomFieldsDocument = graphql(`
+    query GetActiveOrderWithCustomFields {
+        activeOrder {
+            id
+            code
+            state
+            active
+            subTotal
+            subTotalWithTax
+            shipping
+            shippingWithTax
+            total
+            totalWithTax
+            currencyCode
+            couponCodes
+            discounts {
+                adjustmentSource
+                amount
+                amountWithTax
+                description
+                type
+            }
+            lines {
+                id
+                quantity
+                linePrice
+                linePriceWithTax
+                unitPrice
+                unitPriceWithTax
+                unitPriceChangeSinceAdded
+                unitPriceWithTaxChangeSinceAdded
+                discountedUnitPriceWithTax
+                proratedUnitPriceWithTax
+                productVariant {
+                    id
+                }
+                discounts {
+                    adjustmentSource
+                    amount
+                    amountWithTax
+                    description
+                    type
+                }
+                customFields {
+                    inscription
+                }
+            }
+            shippingLines {
+                priceWithTax
+                shippingMethod {
+                    id
+                    code
+                    description
+                }
+            }
+        }
+    }
+`);
+
 describe('Order merging', () => {
-    type OrderSuccessResult = UpdatedOrderFragment | TestOrderFragmentFragment;
-    const orderResultGuard: ErrorResultGuard<OrderSuccessResult> = createErrorResultGuard(
-        input => !!input.lines,
+    type LoginSuccessResult = FragmentOf<typeof currentUserFragment>;
+    const loginResultGuard: ErrorResultGuard<LoginSuccessResult> = createErrorResultGuard(
+        input => !!input && 'id' in input && !('errorCode' in input),
     );
 
-    let customers: GetCustomerList.Items[];
+    let customers: ResultOf<typeof getCustomerListDocument>['customers']['items'];
 
     const { server, shopClient, adminClient } = createTestEnvironment(
         mergeConfig(testConfig(), {
@@ -75,7 +126,7 @@ describe('Order merging', () => {
             customerCount: 10,
         });
         await adminClient.asSuperAdmin();
-        const result = await adminClient.query<GetCustomerList.Query>(GET_CUSTOMER_LIST);
+        const result = await adminClient.query(getCustomerListDocument);
         customers = result.customers.items;
     }, TEST_SETUP_TIMEOUT_MS);
 
@@ -94,25 +145,30 @@ describe('Order merging', () => {
 
         await shopClient.asUserWithCredentials(customerEmailAddress, 'test');
         for (const line of existingOrderLines) {
-            await shopClient.query<AddItemToOrder.Mutation, AddItemToOrderWithCustomFields>(
-                ADD_ITEM_TO_ORDER_WITH_CUSTOM_FIELDS,
-                line,
+            await shopClient.query(
+                addItemToOrderCustomFieldsDocument,
+                line as VariablesOf<typeof addItemToOrderCustomFieldsDocument>,
             );
         }
 
         await shopClient.asAnonymousUser();
         for (const line of guestOrderLines) {
-            await shopClient.query<AddItemToOrder.Mutation, AddItemToOrderWithCustomFields>(
-                ADD_ITEM_TO_ORDER_WITH_CUSTOM_FIELDS,
-                line,
+            await shopClient.query(
+                addItemToOrderCustomFieldsDocument,
+                line as VariablesOf<typeof addItemToOrderCustomFieldsDocument>,
             );
         }
 
-        await shopClient.query<AttemptLogin.Mutation, AttemptLogin.Variables>(ATTEMPT_LOGIN, {
+        await shopClient.query(attemptLoginDocument, {
             username: customerEmailAddress,
             password: 'test',
         });
-        const { activeOrder } = await shopClient.query(GET_ACTIVE_ORDER_WITH_CUSTOM_FIELDS);
+        const { activeOrder } = await shopClient.query(getActiveOrderWithCustomFieldsDocument);
+
+        if (!activeOrder) {
+            throw new Error('Active order not found');
+        }
+
         return activeOrder;
     }
 
@@ -186,6 +242,25 @@ describe('Order merging', () => {
         ).toEqual([{ productVariantId: 'T_5', quantity: 3 }]);
     });
 
+    it('UseGuestStrategy with conflicting lines', async () => {
+        const result = await testMerge({
+            strategy: new UseGuestStrategy(),
+            customerEmailAddress: customers[8].emailAddress,
+            existingOrderLines: [
+                { productVariantId: 'T_7', quantity: 1 },
+                { productVariantId: 'T_8', quantity: 1 },
+            ],
+            guestOrderLines: [{ productVariantId: 'T_8', quantity: 3 }],
+        });
+
+        expect(
+            (result?.lines || []).sort(sortById).map(line => ({
+                productVariantId: line.productVariant.id,
+                quantity: line.quantity,
+            })),
+        ).toEqual([{ productVariantId: 'T_8', quantity: 3 }]);
+    });
+
     it('UseGuestIfExistingEmptyStrategy with empty existing', async () => {
         const result = await testMerge({
             strategy: new UseGuestIfExistingEmptyStrategy(),
@@ -234,62 +309,22 @@ describe('Order merging', () => {
         ).toEqual([{ productVariantId: 'T_8', quantity: 1 }]);
     });
 
-    // https://github.com/vendure-ecommerce/vendure/issues/1454
+    // https://github.com/vendurehq/vendure/issues/1454
     it('does not throw FK error when merging with a cart with an existing session', async () => {
         await shopClient.asUserWithCredentials(customers[7].emailAddress, 'test');
         // Create an Order linked with the current session
-        const { nextOrderStates } = await shopClient.query<GetNextOrderStatesQuery>(GET_NEXT_STATES);
+        await shopClient.query(getNextStatesDocument);
 
         // unset last auth token to simulate a guest user in a different browser
         shopClient.setAuthToken('');
-        await shopClient.query<AddItemToOrderMutation, AddItemToOrderWithCustomFields>(
-            ADD_ITEM_TO_ORDER_WITH_CUSTOM_FIELDS,
-            { productVariantId: '1', quantity: 2 },
-        );
+        await shopClient.query(addItemToOrderDocument, { productVariantId: '1', quantity: 2 });
 
-        const { login } = await shopClient.query<AttemptLoginMutation, AttemptLoginMutationVariables>(
-            ATTEMPT_LOGIN,
-            { username: customers[7].emailAddress, password: 'test' },
-        );
+        const { login } = await shopClient.query(attemptLoginDocument, {
+            username: customers[7].emailAddress,
+            password: 'test',
+        });
 
+        loginResultGuard.assertSuccess(login);
         expect(login.id).toBe(customers[7].user?.id);
     });
 });
-
-export const ADD_ITEM_TO_ORDER_WITH_CUSTOM_FIELDS = gql`
-    mutation AddItemToOrder(
-        $productVariantId: ID!
-        $quantity: Int!
-        $customFields: OrderLineCustomFieldsInput
-    ) {
-        addItemToOrder(
-            productVariantId: $productVariantId
-            quantity: $quantity
-            customFields: $customFields
-        ) {
-            ... on Order {
-                id
-            }
-            ... on ErrorResult {
-                errorCode
-                message
-            }
-        }
-    }
-`;
-
-export const GET_ACTIVE_ORDER_WITH_CUSTOM_FIELDS = gql`
-    query GetActiveOrder {
-        activeOrder {
-            ...TestOrderFragment
-            ... on Order {
-                lines {
-                    customFields {
-                        inscription
-                    }
-                }
-            }
-        }
-    }
-    ${TEST_ORDER_FRAGMENT}
-`;

@@ -1,14 +1,24 @@
-import { HttpClient, HttpParams } from '@angular/common/http';
-import { Component } from '@angular/core';
+import { HttpClient } from '@angular/common/http';
+import { Component, OnInit } from '@angular/core';
 import { Router } from '@angular/router';
-import { ADMIN_UI_VERSION, AuthService, AUTH_REDIRECT_PARAM, getAppConfig } from '@vendure/admin-ui/core';
+import {
+    ADMIN_UI_VERSION,
+    AuthService,
+    AUTH_REDIRECT_PARAM,
+    getAppConfig,
+    LocalizationDirectionType,
+    LocalizationService,
+} from '@vendure/admin-ui/core';
 
 @Component({
     selector: 'vdr-login',
     templateUrl: './login.component.html',
     styleUrls: ['./login.component.scss'],
+    standalone: false,
 })
-export class LoginComponent {
+export class LoginComponent implements OnInit {
+    direction$: LocalizationDirectionType;
+
     username = '';
     password = '';
     rememberMe = false;
@@ -16,7 +26,6 @@ export class LoginComponent {
     errorMessage: string | undefined;
     brand = getAppConfig().brand;
     hideVendureBranding = getAppConfig().hideVendureBranding;
-    hideVersion = getAppConfig().hideVersion;
     customImageUrl = getAppConfig().loginImageUrl;
     imageUrl = '';
     imageUnsplashUrl = '';
@@ -24,12 +33,20 @@ export class LoginComponent {
     imageCreator = '';
     imageCreatorUrl = '';
 
-    constructor(private authService: AuthService, private router: Router, private httpClient: HttpClient) {
+    constructor(
+        private authService: AuthService,
+        private router: Router,
+        private httpClient: HttpClient,
+        private localizationService: LocalizationService,
+    ) {
         if (this.customImageUrl) {
             this.imageUrl = this.customImageUrl;
         } else {
             this.loadImage();
         }
+    }
+    ngOnInit(): void {
+        this.direction$ = this.localizationService.direction$;
     }
 
     logIn(): void {
@@ -80,7 +97,7 @@ export class LoginComponent {
             if (redirectToParam && 1 < redirectToParam.length) {
                 redirectTo = atob(decodeURIComponent(redirectToParam[1]));
             }
-        } catch (e) {
+        } catch (e: any) {
             // ignore
         }
         return redirectTo;

@@ -1,4 +1,3 @@
-import { CHANNEL_FRAGMENT } from '@vendure/core/e2e/graphql/fragments';
 import gql from 'graphql-tag';
 
 export const PAYMENT_METHOD_FRAGMENT = gql`
@@ -111,6 +110,17 @@ export const CREATE_CHANNEL = gql`
                 errorCode
                 message
             }
+        }
+    }
+`;
+
+export const CREATE_COUPON = gql`
+    mutation CreatePromotion($input: CreatePromotionInput!) {
+        createPromotion(input: $input) {
+            ... on ErrorResult {
+                errorCode
+            }
+            __typename
         }
     }
 `;

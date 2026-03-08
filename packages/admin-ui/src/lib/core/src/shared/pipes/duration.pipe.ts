@@ -9,7 +9,7 @@ import { I18nService } from '../../providers/i18n/i18n.service';
  * e.g. "12ms", "33s", "2:03m"
  *
  * @example
- * ```TypeScript
+ * ```ts
  * {{ timeInMs | duration }}
  * ```
  *
@@ -17,6 +17,7 @@ import { I18nService } from '../../providers/i18n/i18n.service';
  */
 @Pipe({
     name: 'duration',
+    standalone: false,
 })
 export class DurationPipe implements PipeTransform {
     constructor(private i18nService: I18nService) {}

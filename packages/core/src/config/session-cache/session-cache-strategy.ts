@@ -50,52 +50,85 @@ export type CachedSession = {
  * SQL query each time. Therefore, we cache the session data only perform the SQL query once and upon
  * invalidation of the cache.
  *
- * The Vendure default is to use a the {@link InMemorySessionCacheStrategy}, which is fast and suitable for
- * single-instance deployments. However, for multi-instance deployments (horizontally scaled, serverless etc.),
- * you will need to define a custom strategy that stores the session cache in a shared data store, such as in the
- * DB or in Redis.
+ * The Vendure default from v3.1+ is to use a the {@link DefaultSessionCacheStrategy}, which delegates
+ * to the configured {@link CacheStrategy} to store the session data. This should be suitable
+ * for most use-cases.
+ *
+ * :::note
+ *
+ * If you are using v3.1 or later, you should not normally need to implement a custom `SessionCacheStrategy`,
+ * since this is now handled by the {@link DefaultSessionCacheStrategy}.
+ *
+ * :::
+ *
+ * Prior to v3.1, the default was to use the {@link InMemorySessionCacheStrategy}, which is fast but suitable for
+ * single-instance deployments.
+ *
+ * :::info
+ *
+ * This is configured via the `authOptions.sessionCacheStrategy` property of
+ * your VendureConfig.
+ *
+ * :::
  *
  * Here's an example implementation using Redis. To use this, you need to add the
  * [ioredis package](https://www.npmjs.com/package/ioredis) as a dependency.
  *
  * @example
- * ```TypeScript
+ * ```ts
  * import { CachedSession, Logger, SessionCacheStrategy, VendurePlugin } from '\@vendure/core';
- * import IORedis from 'ioredis';
+ * import { Redis, RedisOptions } from 'ioredis';
  *
  * export interface RedisSessionCachePluginOptions {
  *   namespace?: string;
- *   redisOptions?: IORedis.RedisOptions;
+ *   redisOptions?: RedisOptions;
  * }
  * const loggerCtx = 'RedisSessionCacheStrategy';
  * const DEFAULT_NAMESPACE = 'vendure-session-cache';
+ * const DEFAULT_TTL = 86400;
  *
  * export class RedisSessionCacheStrategy implements SessionCacheStrategy {
- *   private client: IORedis.Redis;
+ *   private client: Redis;
  *   constructor(private options: RedisSessionCachePluginOptions) {}
  *
  *   init() {
- *     this.client = new IORedis(this.options.redisOptions);
+ *     this.client = new Redis(this.options.redisOptions as RedisOptions);
  *     this.client.on('error', err => Logger.error(err.message, loggerCtx, err.stack));
  *   }
  *
+ *   async destroy() {
+ *     await this.client.quit();
+ *   }
+ *
  *   async get(sessionToken: string): Promise<CachedSession | undefined> {
- *     const retrieved = await this.client.get(this.namespace(sessionToken));
- *     if (retrieved) {
- *       try {
- *         return JSON.parse(retrieved);
- *       } catch (e) {
- *         Logger.error(`Could not parse cached session data: ${e.message}`, loggerCtx);
+ *     try {
+ *       const retrieved = await this.client.get(this.namespace(sessionToken));
+ *       if (retrieved) {
+ *         try {
+ *           return JSON.parse(retrieved);
+ *         } catch (e: any) {
+ *           Logger.error(`Could not parse cached session data: ${e.message}`, loggerCtx);
+ *         }
  *       }
+ *     } catch (e: any) {
+ *       Logger.error(`Could not get cached session: ${e.message}`, loggerCtx);
  *     }
  *   }
  *
  *   async set(session: CachedSession) {
- *     await this.client.set(this.namespace(session.token), JSON.stringify(session));
+ *     try {
+ *       await this.client.set(this.namespace(session.token), JSON.stringify(session), 'EX', DEFAULT_TTL);
+ *     } catch (e: any) {
+ *       Logger.error(`Could not set cached session: ${e.message}`, loggerCtx);
+ *     }
  *   }
  *
  *   async delete(sessionToken: string) {
- *     await this.client.del(this.namespace(sessionToken));
+ *     try {
+ *       await this.client.del(this.namespace(sessionToken));
+ *     } catch (e: any) {
+ *       Logger.error(`Could not delete cached session: ${e.message}`, loggerCtx);
+ *     }
  *   }
  *
  *   clear() {

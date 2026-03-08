@@ -1,8 +1,10 @@
 import { printSchema } from 'graphql';
+import { describe, expect, it } from 'vitest';
 
 import { CustomFieldConfig, CustomFields } from '../../config/custom-field/custom-field-types';
 
 import {
+    addActiveAdministratorCustomFields,
     addGraphQLCustomFields,
     addOrderLineCustomFieldsInput,
     addRegisterCustomerCustomFieldsInput,
@@ -20,6 +22,29 @@ describe('addGraphQLCustomFields()', () => {
         };
         const result = addGraphQLCustomFields(input, customFieldConfig, false);
         expect(printSchema(result)).toMatchSnapshot();
+    });
+
+    // regression test for
+    // https://github.com/vendurehq/vendure/issues/3158
+    it('uses JSON scalar in UpdateActiveAdministratorInput if only internal custom fields defined on Administrator', () => {
+        // custom field that is internal but not readonly - should not cause
+        // `addActiveAdministratorCustomFields` to assume that
+        // `UpdateAdministratorCustomFieldsInput` exists
+        const customFieldConfig: Required<Pick<CustomFields, 'Administrator'>> = {
+            Administrator: [{ name: 'testField', type: 'string', internal: true }],
+        };
+        // `addActiveAdministratorCustomFields` should add customFields to
+        // UpdateActiveAdministratorInput as a JSON scalar. need to provide
+        // those types for that to work
+        const input = `
+            scalar JSON
+
+            input UpdateActiveAdministratorInput {
+                placeholder: String
+            }
+        `;
+        const schema = addActiveAdministratorCustomFields(input, customFieldConfig.Administrator);
+        expect(printSchema(schema)).toMatchSnapshot();
     });
 
     it('extends a type', () => {
@@ -221,6 +246,44 @@ describe('addGraphQLCustomFields()', () => {
         const result = addGraphQLCustomFields(input, customFieldConfig, true);
         expect(printSchema(result)).toMatchSnapshot();
     });
+
+    it('handles deprecated custom fields', () => {
+        const input = `
+            type Product {
+                id: ID
+            }
+        `;
+        const customFieldConfig: CustomFields = {
+            Product: [
+                { name: 'available', type: 'boolean' },
+                { name: 'oldField', type: 'string', deprecated: true },
+                { name: 'legacyField', type: 'int', deprecated: 'Use newField instead' },
+            ],
+        };
+        const result = addGraphQLCustomFields(input, customFieldConfig, false);
+        expect(printSchema(result)).toMatchSnapshot();
+    });
+
+    it('handles deprecated custom fields with translations', () => {
+        const input = `
+            type Product {
+                id: ID
+                translations: [ProductTranslation!]!
+            }
+
+            type ProductTranslation {
+                id: ID
+            }
+        `;
+        const customFieldConfig: CustomFields = {
+            Product: [
+                { name: 'available', type: 'boolean' },
+                { name: 'oldName', type: 'localeString', deprecated: 'Use name instead' },
+            ],
+        };
+        const result = addGraphQLCustomFields(input, customFieldConfig, false);
+        expect(printSchema(result)).toMatchSnapshot();
+    });
 });
 
 describe('addOrderLineCustomFieldsInput()', () => {
@@ -235,7 +298,7 @@ describe('addOrderLineCustomFieldsInput()', () => {
             { name: 'giftWrap', type: 'boolean' },
             { name: 'message', type: 'string' },
         ];
-        const result = addOrderLineCustomFieldsInput(input, customFieldConfig);
+        const result = addOrderLineCustomFieldsInput(input, customFieldConfig, false);
         expect(printSchema(result)).toMatchSnapshot();
     });
 });

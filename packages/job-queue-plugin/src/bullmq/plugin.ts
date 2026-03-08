@@ -1,7 +1,9 @@
 import { PluginCommonModule, VendurePlugin } from '@vendure/core';
 
 import { BullMQJobQueueStrategy } from './bullmq-job-queue-strategy';
+import { cleanIndexedSetsTask } from './clean-indexed-sets-task';
 import { BULLMQ_PLUGIN_OPTIONS } from './constants';
+import { JobListIndexService } from './job-list-index.service';
 import { RedisHealthCheckStrategy } from './redis-health-check-strategy';
 import { RedisHealthIndicator } from './redis-health-indicator';
 import { RedisJobBufferStorageStrategy } from './redis-job-buffer-storage-strategy';
@@ -28,13 +30,13 @@ import { BullMQPluginOptions } from './types';
  *
  * ## Installation
  *
- * `yarn add \@vendure/job-queue-plugin bullmq@1`
+ * Note: To use this plugin, you need to manually install the `bullmq` package:
  *
- * or
+ * ```shell
+ * npm install bullmq@^5.4.2
+ * ```
  *
- * `npm install \@vendure/job-queue-plugin bullmq@1`
- *
- * **Note:** The v1.x version of this plugin is designed to work with bullmq v1.x.
+ * **Note:** The v1.x version of this plugin is designed to work with bullmq v1.x, etc.
  *
  * @example
  * ```ts
@@ -43,6 +45,7 @@ import { BullMQPluginOptions } from './types';
  * const config: VendureConfig = {
  *   // Add an instance of the plugin to the plugins array
  *   plugins: [
+ *     // DefaultJobQueuePlugin should be removed from the plugins array
  *     BullMQJobQueuePlugin.init({
  *       connection: {
  *         port: 6379
@@ -62,11 +65,9 @@ import { BullMQPluginOptions } from './types';
  * version: "3"
  * services:
  *   redis:
- *     image: bitnami/redis:6.2
+ *     image: redis:7.4
  *     hostname: redis
  *     container_name: redis
- *     environment:
- *       - ALLOW_EMPTY_PASSWORD=yes
  *     ports:
  *       - "6379:6379"
  *   redis-commander:
@@ -85,7 +86,7 @@ import { BullMQPluginOptions } from './types';
  * You can change the concurrency in the `workerOptions` passed to the `init()` method:
  *
  * @example
- * ```TypeScript
+ * ```ts
  * const config: VendureConfig = {
  *   plugins: [
  *     BullMQJobQueuePlugin.init({
@@ -97,7 +98,94 @@ import { BullMQPluginOptions } from './types';
  * };
  * ```
  *
- * @docsCategory job-queue-plugin
+ * ## Removing old jobs
+ *
+ * By default, BullMQ will keep completed jobs in the `completed` set and failed jobs in the `failed` set. Over time,
+ * these sets can grow very large. Since Vendure v2.1, the default behaviour is to remove jobs from these sets after
+ * 30 days or after a maximum of 5,000 completed or failed jobs.
+ *
+ * This can be configured using the `removeOnComplete` and `removeOnFail` options:
+ *
+ * @example
+ * ```ts
+ * const config: VendureConfig = {
+ *   plugins: [
+ *     BullMQJobQueuePlugin.init({
+ *       workerOptions: {
+ *         removeOnComplete: {
+ *           count: 500,
+ *         },
+ *         removeOnFail: {
+ *           age: 60 * 60 * 24 * 7, // 7 days
+ *           count: 1000,
+ *         },
+ *       }
+ *     }),
+ *   ],
+ * };
+ * ```
+ *
+ * The `count` option specifies the maximum number of jobs to keep in the set, while the `age` option specifies the
+ * maximum age of a job in seconds. If both options are specified, then the jobs kept will be the ones that satisfy
+ * both properties.
+ *
+ * ## Job Priority
+ * Some jobs are more important than others. For example, sending out a timely email after a customer places an order
+ * is probably more important than a routine data import task. Sometimes you can get the situation where lower-priority
+ * jobs are blocking higher-priority jobs.
+ *
+ * Let's say you have a data import job that runs periodically and takes a long time to complete. If you have a high-priority
+ * job that needs to be processed quickly, it could be stuck behind the data import job in the queue. A customer might
+ * not get their confirmation email for 30 minutes while that data import job is processed!
+ *
+ * To solve this problem, you can set the `priority` option on a job. Jobs with a higher priority will be processed before
+ * jobs with a lower priority. By default, all jobs have a priority of 0 (which is the highest).
+ *
+ * Learn more about how priority works in BullMQ in their [documentation](https://docs.bullmq.io/guide/jobs/prioritized).
+ *
+ * You can set the priority by using the `setJobOptions` option (introduced in Vendure v3.2.0):
+ *
+ * @example
+ * ```ts
+ * const config: VendureConfig = {
+ *   plugins: [
+ *     BullMQJobQueuePlugin.init({
+ *       setJobOptions: (queueName, job) => {
+ *         let priority = 10;
+ *         switch (queueName) {
+ *           case 'super-critical-task':
+ *             priority = 0;
+ *             break;
+ *           case 'send-email':
+ *             priority = 5;
+ *             break;
+ *           default:
+ *             priority = 10;
+ *         }
+ *         return { priority };
+ *       }
+ *     }),
+ *   ],
+ * };
+ * ```
+ *
+ * ## Setting Redis Prefix
+ *
+ * By default, the underlying BullMQ library will use the default Redis key prefix of `bull`. This can be changed by setting the `prefix` option
+ * in the `queueOptions` and `workerOptions` objects:
+ *
+ * ```ts
+ * BullMQJobQueuePlugin.init({
+ *   workerOptions: {
+ *     prefix: 'my-prefix'
+ *   },
+ *   queueOptions: {
+ *     prefix: 'my-prefix'
+ *   }
+ * }),
+ * ```
+ *
+ * @docsCategory core plugins/JobQueuePlugin
  */
 @VendurePlugin({
     imports: [PluginCommonModule],
@@ -105,12 +193,15 @@ import { BullMQPluginOptions } from './types';
         config.jobQueueOptions.jobQueueStrategy = new BullMQJobQueueStrategy();
         config.jobQueueOptions.jobBufferStorageStrategy = new RedisJobBufferStorageStrategy();
         config.systemOptions.healthChecks.push(new RedisHealthCheckStrategy());
+        config.schedulerOptions.tasks.push(cleanIndexedSetsTask);
         return config;
     },
     providers: [
         { provide: BULLMQ_PLUGIN_OPTIONS, useFactory: () => BullMQJobQueuePlugin.options },
         RedisHealthIndicator,
+        JobListIndexService,
     ],
+    compatibility: '^3.0.0',
 })
 export class BullMQJobQueuePlugin {
     static options: BullMQPluginOptions;

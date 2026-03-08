@@ -9,6 +9,7 @@ import { NativeAuthenticationMethod } from '../authentication-method/native-auth
 import { VendureEntity } from '../base/base.entity';
 import { CustomUserFields } from '../custom-entity-fields';
 import { Role } from '../role/role.entity';
+import { AuthenticatedSession } from '../session/authenticated-session.entity';
 
 /**
  * @description
@@ -29,10 +30,7 @@ export class User extends VendureEntity implements HasCustomFields, SoftDeletabl
     @Column()
     identifier: string;
 
-    @OneToMany(
-        type => AuthenticationMethod,
-        method => method.user,
-    )
+    @OneToMany(type => AuthenticationMethod, method => method.user)
     authenticationMethods: AuthenticationMethod[];
 
     @Column({ default: false })
@@ -48,10 +46,13 @@ export class User extends VendureEntity implements HasCustomFields, SoftDeletabl
     @Column(type => CustomUserFields)
     customFields: CustomUserFields;
 
-    getNativeAuthenticationMethod(): NativeAuthenticationMethod;
-    getNativeAuthenticationMethod(strict? : boolean): NativeAuthenticationMethod | undefined;
+    @OneToMany(type => AuthenticatedSession, session => session.user)
+    sessions: AuthenticatedSession[];
 
-    getNativeAuthenticationMethod(strict? : boolean): NativeAuthenticationMethod | undefined {
+    getNativeAuthenticationMethod(): NativeAuthenticationMethod;
+    getNativeAuthenticationMethod(strict?: boolean): NativeAuthenticationMethod | undefined;
+
+    getNativeAuthenticationMethod(strict?: boolean): NativeAuthenticationMethod | undefined {
         if (!this.authenticationMethods) {
             throw new InternalServerError('error.user-authentication-methods-not-loaded');
         }

@@ -1,15 +1,11 @@
 import { ChangeDetectionStrategy, Component, Input, OnInit, TemplateRef, ViewChild } from '@angular/core';
-import { FormControl } from '@angular/forms';
+import { UntypedFormControl } from '@angular/forms';
 import { marker as _ } from '@biesbjerg/ngx-translate-extract-marker';
 import { Observable, of, Subject } from 'rxjs';
 import { debounceTime, distinctUntilChanged, map, startWith, switchMap } from 'rxjs/operators';
 
-import {
-    GetProductVariant,
-    GetProductVariantList,
-    GetProductVariantListSimple,
-    RelationCustomFieldConfig,
-} from '../../../../common/generated-types';
+import * as Codegen from '../../../../common/generated-types';
+import { RelationCustomFieldConfig } from '../../../../common/generated-types';
 import { DataService } from '../../../../data/providers/data.service';
 import { ModalService } from '../../../../providers/modal/modal.service';
 import { RelationSelectorDialogComponent } from '../relation-selector-dialog/relation-selector-dialog.component';
@@ -19,20 +15,24 @@ import { RelationSelectorDialogComponent } from '../relation-selector-dialog/rel
     templateUrl: './relation-product-variant-input.component.html',
     styleUrls: ['./relation-product-variant-input.component.scss'],
     changeDetection: ChangeDetectionStrategy.OnPush,
+    standalone: false,
 })
 export class RelationProductVariantInputComponent implements OnInit {
     @Input() readonly: boolean;
-    @Input() parentFormControl: FormControl;
+    @Input() parentFormControl: UntypedFormControl;
     @Input() config: RelationCustomFieldConfig;
 
     @ViewChild('selector') template: TemplateRef<any>;
 
-    searchControl = new FormControl('');
+    searchControl = new UntypedFormControl('');
     searchTerm$ = new Subject<string>();
-    results$: Observable<GetProductVariantListSimple.Items[]>;
-    productVariant$: Observable<GetProductVariant.ProductVariant | undefined>;
+    results$: Observable<Codegen.GetProductVariantListSimpleQuery['productVariants']['items']>;
+    productVariant$: Observable<Codegen.GetProductVariantQuery['productVariant'] | undefined>;
 
-    constructor(private modalService: ModalService, private dataService: DataService) {}
+    constructor(
+        private modalService: ModalService,
+        private dataService: DataService,
+    ) {}
 
     ngOnInit() {
         this.productVariant$ = this.parentFormControl.valueChanges.pipe(
@@ -52,8 +52,8 @@ export class RelationProductVariantInputComponent implements OnInit {
 
         this.results$ = this.searchTerm$.pipe(
             debounceTime(200),
-            switchMap(term => {
-                return this.dataService.product
+            switchMap(term =>
+                this.dataService.product
                     .getProductVariantsSimple({
                         ...(term
                             ? {
@@ -66,8 +66,8 @@ export class RelationProductVariantInputComponent implements OnInit {
                             : {}),
                         take: 10,
                     })
-                    .mapSingle(data => data.productVariants.items);
-            }),
+                    .mapSingle(data => data.productVariants.items),
+            ),
         );
     }
 

@@ -4,9 +4,9 @@ import {
     AssetType,
     AssignAssetsToChannelInput,
     CreateAssetInput,
-    CreateAssetResult,
     DeletionResponse,
     DeletionResult,
+    LanguageCode,
     LogicalOperator,
     Permission,
     UpdateAssetInput,
@@ -21,18 +21,23 @@ import { IncomingMessage } from 'http';
 import mime from 'mime-types';
 import path from 'path';
 import { Readable, Stream } from 'stream';
+import { IsNull } from 'typeorm';
+import { FindOneOptions } from 'typeorm/find-options/FindOneOptions';
 import { camelCase } from 'typeorm/util/StringUtils';
 
 import { RequestContext } from '../../api/common/request-context';
-import { RelationPaths } from '../../api/index';
+import { RelationPaths } from '../../api/decorators/relations.decorator';
+import { Instrument } from '../../common';
 import { isGraphQlErrorResult } from '../../common/error/error-result';
 import { ForbiddenError, InternalServerError } from '../../common/error/errors';
 import { MimeTypeError } from '../../common/error/generated-graphql-admin-errors';
 import { ChannelAware } from '../../common/types/common-types';
+import { Translated } from '../../common/types/locale-types';
 import { getAssetType, idsAreEqual } from '../../common/utils';
 import { ConfigService } from '../../config/config.service';
 import { Logger } from '../../config/logger/vendure-logger';
 import { TransactionalConnection } from '../../connection/transactional-connection';
+import { AssetTranslation } from '../../entity/asset/asset-translation.entity';
 import { Asset } from '../../entity/asset/asset.entity';
 import { OrderableAsset } from '../../entity/asset/orderable-asset.entity';
 import { VendureEntity } from '../../entity/base/base.entity';
@@ -44,13 +49,15 @@ import { AssetChannelEvent } from '../../event-bus/events/asset-channel-event';
 import { AssetEvent } from '../../event-bus/events/asset-event';
 import { CustomFieldRelationService } from '../helpers/custom-field-relation/custom-field-relation.service';
 import { ListQueryBuilder } from '../helpers/list-query-builder/list-query-builder';
+import { TranslatableSaver } from '../helpers/translatable-saver/translatable-saver';
+import { TranslatorService } from '../helpers/translator/translator.service';
 import { patchEntity } from '../helpers/utils/patch-entity';
 
 import { ChannelService } from './channel.service';
 import { RoleService } from './role.service';
 import { TagService } from './tag.service';
 
-// tslint:disable-next-line:no-var-requires
+// eslint-disable-next-line @typescript-eslint/no-var-requires
 const sizeOf = require('image-size');
 
 /**
@@ -86,6 +93,7 @@ export interface EntityAssetInput {
  * @docsWeight 0
  */
 @Injectable()
+@Instrument()
 export class AssetService {
     private permittedMimeTypes: Array<{ type: string; subtype: string }> = [];
 
@@ -98,6 +106,8 @@ export class AssetService {
         private channelService: ChannelService,
         private roleService: RoleService,
         private customFieldRelationService: CustomFieldRelationService,
+        private readonly translatableSaver: TranslatableSaver,
+        private readonly translator: TranslatorService,
     ) {
         this.permittedMimeTypes = this.configService.assetOptions.permittedFileTypes
             .map(val => (/\.[\w]+/.test(val) ? mime.lookup(val) || undefined : val))
@@ -108,17 +118,23 @@ export class AssetService {
             });
     }
 
-    findOne(ctx: RequestContext, id: ID, relations?: RelationPaths<Asset>): Promise<Asset | undefined> {
-        return this.connection.findOneInChannel(ctx, Asset, id, ctx.channelId, {
-            relations: relations ?? [],
-        });
+    findOne(
+        ctx: RequestContext,
+        id: ID,
+        relations?: RelationPaths<Asset>,
+    ): Promise<Translated<Asset> | undefined> {
+        return this.connection
+            .findOneInChannel(ctx, Asset, id, ctx.channelId, {
+                relations: relations ?? [],
+            })
+            .then(result => (result ? this.translator.translate(result, ctx) : undefined));
     }
 
     findAll(
         ctx: RequestContext,
         options?: AssetListOptions,
         relations?: RelationPaths<Asset>,
-    ): Promise<PaginatedList<Asset>> {
+    ): Promise<PaginatedList<Translated<Asset>>> {
         const qb = this.listQueryBuilder.build(Asset, options, {
             ctx,
             relations: [...(relations ?? []), 'tags'],
@@ -132,7 +148,7 @@ export class AssetService {
                 .select('asset.id')
                 .from(Asset, 'asset')
                 .leftJoin('asset.tags', 'tags')
-                .where(`tags.value IN (:...tags)`);
+                .where('tags.value IN (:...tags)');
 
             if (operator === LogicalOperator.AND) {
                 subquery.groupBy('asset.id').having('COUNT(asset.id) = :tagCount');
@@ -144,7 +160,7 @@ export class AssetService {
             });
         }
         return qb.getManyAndCount().then(([items, totalItems]) => ({
-            items,
+            items: items.map(asset => this.translator.translate(asset, ctx)),
             totalItems,
         }));
     }
@@ -164,14 +180,21 @@ export class AssetService {
                 ctx.channelId,
                 {
                     relations: ['featuredAsset'],
+                    loadEagerRelations: false,
                 },
             );
         } else {
             entityWithFeaturedAsset = await this.connection
                 .getRepository(ctx, entityType)
-                .findOne(entity.id, {
-                    relations: ['featuredAsset'],
-                });
+                .findOne({
+                    where: { id: entity.id },
+                    relations: {
+                        featuredAsset: true,
+                    },
+                    loadEagerRelations: false,
+                    // TODO: satisfies
+                } as FindOneOptions<T>)
+                .then(result => result ?? undefined);
         }
         return (entityWithFeaturedAsset && entityWithFeaturedAsset.featuredAsset) || undefined;
     }
@@ -193,6 +216,7 @@ export class AssetService {
                 .createQueryBuilder('entity')
                 .leftJoinAndSelect('entity.assets', 'orderable_asset')
                 .leftJoinAndSelect('orderable_asset.asset', 'asset')
+                .leftJoinAndSelect('asset.translations', 'asset_translations')
                 .leftJoinAndSelect('asset.channels', 'asset_channel')
                 .where('entity.id = :id', { id: entity.id })
                 .andWhere('asset_channel.id = :channelId', { channelId: ctx.channelId })
@@ -263,7 +287,11 @@ export class AssetService {
                 .map(id => assets.find(a => idsAreEqual(a.id, id)))
                 .filter(notNullOrUndefined);
             await this.removeExistingOrderableAssets(ctx, entity);
-            entity.assets = await this.createOrderableAssets(ctx, entity, sortedAssets);
+            if (sortedAssets.length > 0) {
+                entity.assets = await this.createOrderableAssets(ctx, entity, sortedAssets);
+            } else {
+                entity.assets = [];
+            }
         } else if (assetIds && assetIds.length === 0) {
             await this.removeExistingOrderableAssets(ctx, entity);
         }
@@ -276,56 +304,67 @@ export class AssetService {
      * using the [GraphQL multipart request specification](https://github.com/jaydenseric/graphql-multipart-request-spec),
      * e.g. using the [apollo-upload-client](https://github.com/jaydenseric/apollo-upload-client) npm package.
      *
-     * See the [Uploading Files docs](/docs/developer-guide/uploading-files) for an example of usage.
+     * See the [Uploading Files docs](/developer-guide/uploading-files) for an example of usage.
      */
-    async create(ctx: RequestContext, input: CreateAssetInput): Promise<CreateAssetResult> {
-        return new Promise(async (resolve, reject) => {
-            const { createReadStream, filename, mimetype } = await input.file;
-            const stream = createReadStream();
-            stream.on('error', (err: any) => {
-                reject(err);
-            });
-            let result: Asset | MimeTypeError;
-            try {
-                result = await this.createAssetInternal(ctx, stream, filename, mimetype, input.customFields);
-            } catch (e) {
-                reject(e);
-                return;
-            }
-            if (isGraphQlErrorResult(result)) {
-                resolve(result);
-                return;
-            }
-            await this.customFieldRelationService.updateRelations(ctx, Asset, input, result);
-            if (input.tags) {
-                const tags = await this.tagService.valuesToTags(ctx, input.tags);
-                result.tags = tags;
-                await this.connection.getRepository(ctx, Asset).save(result);
-            }
-            this.eventBus.publish(new AssetEvent(ctx, result, 'created', input));
-            resolve(result);
-        });
+    async create(ctx: RequestContext, input: CreateAssetInput): Promise<Translated<Asset> | MimeTypeError> {
+        const { createReadStream, filename, mimetype } = await input.file;
+        const { stream, errorPromise } = this.makeStreamGuard(createReadStream);
+        const result = await Promise.race([
+            this.createAssetInternal(ctx, stream, filename, mimetype, input.customFields, input.translations),
+            errorPromise,
+        ]);
+        if (isGraphQlErrorResult(result)) {
+            return result;
+        }
+        await this.customFieldRelationService.updateRelations(ctx, Asset, input, result);
+        if (input.tags) {
+            const tags = await this.tagService.valuesToTags(ctx, input.tags);
+            result.tags = tags;
+            await this.connection.getRepository(ctx, Asset).save(result);
+        }
+        const translatedAsset = this.translator.translate(result, ctx);
+        await this.eventBus.publish(new AssetEvent(ctx, translatedAsset, 'created', input));
+        return translatedAsset;
     }
 
     /**
      * @description
      * Updates the name, focalPoint, tags & custom fields of an Asset.
      */
-    async update(ctx: RequestContext, input: UpdateAssetInput): Promise<Asset> {
+    async update(ctx: RequestContext, input: UpdateAssetInput): Promise<Translated<Asset>> {
         const asset = await this.connection.getEntityOrThrow(ctx, Asset, input.id);
         if (input.focalPoint) {
             const to3dp = (x: number) => +x.toFixed(3);
             input.focalPoint.x = to3dp(input.focalPoint.x);
             input.focalPoint.y = to3dp(input.focalPoint.y);
         }
-        patchEntity(asset, omit(input, ['tags']));
+        patchEntity(asset, omit(input, ['tags', 'name', 'translations']));
         await this.customFieldRelationService.updateRelations(ctx, Asset, input, asset);
         if (input.tags) {
             asset.tags = await this.tagService.valuesToTags(ctx, input.tags);
         }
-        const updatedAsset = await this.connection.getRepository(ctx, Asset).save(asset);
-        this.eventBus.publish(new AssetEvent(ctx, updatedAsset, 'updated', input));
-        return updatedAsset;
+        // Handle translations
+        const translationsInput = input.translations ?? [];
+        // For backward compatibility: if name is provided without translations, update the current language translation
+        if (input.name != null && !translationsInput.some(t => t.languageCode === ctx.languageCode)) {
+            translationsInput.push({ languageCode: ctx.languageCode, name: input.name });
+        }
+        // Save asset first to ensure it exists for translation foreign key
+        const savedAsset = await this.connection.getRepository(ctx, Asset).save(asset);
+        if (translationsInput.length > 0) {
+            await this.translatableSaver.update({
+                ctx,
+                input: { id: savedAsset.id, translations: translationsInput },
+                entityType: Asset,
+                translationType: AssetTranslation,
+            });
+        }
+        const translatedAsset = await this.findOne(ctx, savedAsset.id);
+        if (!translatedAsset) {
+            throw new InternalServerError('error.entity-not-found');
+        }
+        await this.eventBus.publish(new AssetEvent(ctx, translatedAsset, 'updated', input));
+        return translatedAsset;
     }
 
     /**
@@ -376,7 +415,7 @@ export class AssetService {
             await Promise.all(
                 assets.map(async asset => {
                     await this.channelService.removeFromChannels(ctx, Asset, asset.id, [ctx.channelId]);
-                    this.eventBus.publish(new AssetChannelEvent(ctx, asset, ctx.channelId, 'removed'));
+                    await this.eventBus.publish(new AssetChannelEvent(ctx, asset, ctx.channelId, 'removed'));
                 }),
             );
             const isOnlyChannel = channelsOfAssets.length === 1;
@@ -392,13 +431,16 @@ export class AssetService {
         await Promise.all(
             assets.map(async asset => {
                 await this.channelService.removeFromChannels(ctx, Asset, asset.id, channelsOfAssets);
-                this.eventBus.publish(new AssetChannelEvent(ctx, asset, ctx.channelId, 'removed'));
+                await this.eventBus.publish(new AssetChannelEvent(ctx, asset, ctx.channelId, 'removed'));
             }),
         );
         return this.deleteUnconditional(ctx, assets);
     }
 
-    async assignToChannel(ctx: RequestContext, input: AssignAssetsToChannelInput): Promise<Asset[]> {
+    async assignToChannel(
+        ctx: RequestContext,
+        input: AssignAssetsToChannelInput,
+    ): Promise<Array<Translated<Asset>>> {
         const hasPermission = await this.roleService.userHasPermissionOnChannel(
             ctx,
             input.channelId,
@@ -417,33 +459,39 @@ export class AssetService {
         await Promise.all(
             assets.map(async asset => {
                 await this.channelService.assignToChannels(ctx, Asset, asset.id, [input.channelId]);
-                return this.eventBus.publish(new AssetChannelEvent(ctx, asset, input.channelId, 'assigned'));
+                return await this.eventBus.publish(
+                    new AssetChannelEvent(ctx, asset, input.channelId, 'assigned'),
+                );
             }),
         );
-        return this.connection.findByIdsInChannel(
+        const updatedAssets = await this.connection.findByIdsInChannel(
             ctx,
             Asset,
             assets.map(a => a.id),
             ctx.channelId,
             {},
         );
+        return updatedAssets.map(asset => this.translator.translate(asset, ctx));
     }
 
     /**
      * @description
      * Create an Asset from a file stream, for example to create an Asset during data import.
      */
-    async createFromFileStream(stream: ReadStream, ctx?: RequestContext): Promise<CreateAssetResult>;
+    async createFromFileStream(
+        stream: ReadStream,
+        ctx?: RequestContext,
+    ): Promise<Translated<Asset> | MimeTypeError>;
     async createFromFileStream(
         stream: Readable,
         filePath: string,
         ctx?: RequestContext,
-    ): Promise<CreateAssetResult>;
+    ): Promise<Translated<Asset> | MimeTypeError>;
     async createFromFileStream(
         stream: ReadStream | Readable,
         maybeFilePathOrCtx?: string | RequestContext,
         maybeCtx?: RequestContext,
-    ): Promise<CreateAssetResult> {
+    ): Promise<Translated<Asset> | MimeTypeError> {
         const { assetImportStrategy } = this.configService.importExportOptions;
         const filePathFromArgs =
             maybeFilePathOrCtx instanceof RequestContext ? undefined : maybeFilePathOrCtx;
@@ -456,11 +504,15 @@ export class AssetService {
                 maybeFilePathOrCtx instanceof RequestContext
                     ? maybeFilePathOrCtx
                     : maybeCtx instanceof RequestContext
-                    ? maybeCtx
-                    : RequestContext.empty();
-            return this.createAssetInternal(ctx, stream, filename, mimetype);
+                      ? maybeCtx
+                      : RequestContext.empty();
+            const result = await this.createAssetInternal(ctx, stream, filename, mimetype);
+            if (isGraphQlErrorResult(result)) {
+                return result;
+            }
+            return this.translator.translate(result, ctx);
         } else {
-            throw new InternalServerError(`error.path-should-be-a-string-got-buffer`);
+            throw new InternalServerError('error.path-should-be-a-string-got-buffer');
         }
     }
 
@@ -488,10 +540,10 @@ export class AssetService {
             try {
                 await this.configService.assetOptions.assetStorageStrategy.deleteFile(asset.source);
                 await this.configService.assetOptions.assetStorageStrategy.deleteFile(asset.preview);
-            } catch (e) {
-                Logger.error(`error.could-not-delete-asset-file`, undefined, e.stack);
+            } catch (e: any) {
+                Logger.error('error.could-not-delete-asset-file', undefined, e.stack);
             }
-            this.eventBus.publish(new AssetEvent(ctx, deletedAsset, 'deleted', deletedAsset.id));
+            await this.eventBus.publish(new AssetEvent(ctx, deletedAsset, 'deleted', deletedAsset.id));
         }
         return {
             result: DeletionResult.DELETED,
@@ -516,10 +568,11 @@ export class AssetService {
         filename: string,
         mimetype: string,
         customFields?: { [key: string]: any },
+        translations?: Array<{ languageCode: LanguageCode; name?: string | null; customFields?: any }>,
     ): Promise<Asset | MimeTypeError> {
         const { assetOptions } = this.configService;
         if (!this.validateMimeType(mimetype)) {
-            return new MimeTypeError(filename, mimetype);
+            return new MimeTypeError({ fileName: filename, mimeType: mimetype });
         }
         const { assetPreviewStrategy, assetStorageStrategy } = assetOptions;
         const sourceFileName = await this.getSourceFileName(ctx, filename);
@@ -530,8 +583,9 @@ export class AssetService {
         let preview: Buffer;
         try {
             preview = await assetPreviewStrategy.generatePreviewImage(ctx, mimetype, sourceFile);
-        } catch (e) {
-            Logger.error(`Could not create Asset preview image: ${e.message}`, undefined, e.stack);
+        } catch (e: any) {
+            const message: string = typeof e.message === 'string' ? e.message : e.message.toString();
+            Logger.error(`Could not create Asset preview image: ${message}`, undefined, e.stack);
             throw e;
         }
         const previewFileIdentifier = await assetStorageStrategy.writeFileFromBuffer(
@@ -541,11 +595,11 @@ export class AssetService {
         const type = getAssetType(mimetype);
         const { width, height } = this.getDimensions(type === AssetType.IMAGE ? sourceFile : preview);
 
+        // Save asset first
         const asset = new Asset({
             type,
             width,
             height,
-            name: path.basename(sourceFileName),
             fileSize: sourceFile.byteLength,
             mimeType: mimetype,
             source: sourceFileIdentifier,
@@ -554,7 +608,41 @@ export class AssetService {
             customFields,
         });
         await this.channelService.assignToCurrentChannel(asset, ctx);
-        return this.connection.getRepository(ctx, Asset).save(asset);
+        const savedAsset = await this.connection.getRepository(ctx, Asset).save(asset);
+
+        // Create and save translations with the base relationship set
+        // Use the original filename for the default translation name
+        const defaultName = filename;
+        let assetTranslations: AssetTranslation[];
+        if (translations && translations.length > 0) {
+            assetTranslations = translations.map(
+                t =>
+                    new AssetTranslation({
+                        languageCode: t.languageCode,
+                        name: t.name ?? defaultName,
+                        customFields: t.customFields,
+                        base: savedAsset,
+                    }),
+            );
+        } else {
+            // Create default translation using context language
+            assetTranslations = [
+                new AssetTranslation({
+                    languageCode: ctx.languageCode,
+                    name: defaultName,
+                    base: savedAsset,
+                }),
+            ];
+        }
+
+        // Save translations
+        const savedTranslations = await this.connection
+            .getRepository(ctx, AssetTranslation)
+            .save(assetTranslations);
+
+        // Return the asset with translations eagerly loaded
+        savedAsset.translations = savedTranslations;
+        return savedAsset;
     }
 
     private async getSourceFileName(ctx: RequestContext, fileName: string): Promise<string> {
@@ -587,8 +675,8 @@ export class AssetService {
         try {
             const { width, height } = sizeOf(imageFile);
             return { width, height };
-        } catch (e) {
-            Logger.error(`Could not determine Asset dimensions: ` + e);
+        } catch (e: any) {
+            Logger.error('Could not determine Asset dimensions: ' + JSON.stringify(e));
             return { width: 0, height: 0 };
         }
     }
@@ -670,21 +758,41 @@ export class AssetService {
     ): Promise<{ products: Product[]; variants: ProductVariant[]; collections: Collection[] }> {
         const products = await this.connection.getRepository(ctx, Product).find({
             where: {
-                featuredAsset: asset,
-                deletedAt: null,
+                featuredAsset: { id: asset.id },
+                deletedAt: IsNull(),
             },
         });
         const variants = await this.connection.getRepository(ctx, ProductVariant).find({
             where: {
-                featuredAsset: asset,
-                deletedAt: null,
+                featuredAsset: { id: asset.id },
+                deletedAt: IsNull(),
             },
         });
         const collections = await this.connection.getRepository(ctx, Collection).find({
             where: {
-                featuredAsset: asset,
+                featuredAsset: { id: asset.id },
             },
         });
         return { products, variants, collections };
+    }
+
+    private makeStreamGuard(createReadStream: () => ReadStream): {
+        stream: ReadStream;
+        errorPromise: Promise<never>;
+    } {
+        let onReject: (err: unknown) => void;
+        const errorPromise = new Promise<never>((_, rej) => {
+            onReject = rej;
+        });
+
+        // `fs-capacitor`'s `createReadStream` can throw if its `WriteStream` has already been destroyed
+        // sync error so will bubble to consumer immediately
+        const stream = createReadStream();
+
+        stream.on('error', err => {
+            onReject(err);
+        });
+
+        return { stream, errorPromise };
     }
 }

@@ -8,18 +8,18 @@ import {
     SimpleChanges,
 } from '@angular/core';
 
-import { GetAssetList } from '../../../common/generated-types';
 import { SelectionManager } from '../../../common/utilities/selection-manager';
 import { ModalService } from '../../../providers/modal/modal.service';
 import { AssetPreviewDialogComponent } from '../asset-preview-dialog/asset-preview-dialog.component';
 
-export type AssetLike = GetAssetList.Items;
+import { AssetLike } from './asset-gallery.types';
 
 @Component({
     selector: 'vdr-asset-gallery',
     templateUrl: './asset-gallery.component.html',
     styleUrls: ['./asset-gallery.component.scss'],
     changeDetection: ChangeDetectionStrategy.OnPush,
+    standalone: false,
 })
 export class AssetGalleryComponent implements OnChanges {
     @Input() assets: AssetLike[];
@@ -30,6 +30,7 @@ export class AssetGalleryComponent implements OnChanges {
     @Input() canDelete = false;
     @Output() selectionChange = new EventEmitter<AssetLike[]>();
     @Output() deleteAssets = new EventEmitter<AssetLike[]>();
+    @Output() editAssetClick = new EventEmitter<void>();
 
     selectionManager = new SelectionManager<AssetLike>({
         multiSelect: this.multiSelect,
@@ -80,7 +81,7 @@ export class AssetGalleryComponent implements OnChanges {
             .fromComponent(AssetPreviewDialogComponent, {
                 size: 'xl',
                 closable: true,
-                locals: { asset },
+                locals: { asset, assets: this.assets },
             })
             .subscribe();
     }

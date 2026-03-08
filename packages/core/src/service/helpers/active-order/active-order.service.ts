@@ -1,9 +1,10 @@
 import { Injectable } from '@nestjs/common';
 
 import { RequestContext } from '../../../api/common/request-context';
-import { InternalServerError, UserInputError } from '../../../common/index';
-import { ConfigService } from '../../../config/index';
-import { TransactionalConnection } from '../../../connection/index';
+import { InternalServerError, UserInputError } from '../../../common/error/errors';
+import { idsAreEqual } from '../../../common/utils';
+import { ConfigService } from '../../../config/config.service';
+import { TransactionalConnection } from '../../../connection/transactional-connection';
 import { Order } from '../../../entity/order/order.entity';
 import { OrderService } from '../../services/order.service';
 import { SessionService } from '../../services/session.service';
@@ -37,7 +38,7 @@ export class ActiveOrderService {
     async getOrderFromContext(ctx: RequestContext, createIfNotExists: true): Promise<Order>;
     async getOrderFromContext(ctx: RequestContext, createIfNotExists = false): Promise<Order | undefined> {
         if (!ctx.session) {
-            throw new InternalServerError(`error.no-active-session`);
+            throw new InternalServerError('error.no-active-session');
         }
         let order = ctx.session.activeOrderId
             ? await this.connection
@@ -90,7 +91,7 @@ export class ActiveOrderService {
         input: { [strategyName: string]: Record<string, any> | undefined } | undefined,
         createIfNotExists = false,
     ): Promise<Order | undefined> {
-        let order: any;
+        let order: Order | undefined;
         if (!order) {
             const { activeOrderStrategy } = this.configService.orderOptions;
             const strategyArray = Array.isArray(activeOrderStrategy)
@@ -119,7 +120,11 @@ export class ActiveOrderService {
             }
 
             if (order && ctx.session) {
-                await this.sessionService.setActiveOrder(ctx, ctx.session, order);
+                const orderAlreadyAssignedToSession =
+                    ctx.session.activeOrderId && idsAreEqual(ctx.session.activeOrderId, order.id);
+                if (!orderAlreadyAssignedToSession) {
+                    await this.sessionService.setActiveOrder(ctx, ctx.session, order);
+                }
             }
         }
         return order || undefined;

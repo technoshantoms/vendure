@@ -5,6 +5,24 @@ import { PUB_SUB_OPTIONS } from './constants';
 import { PubSubOptions } from './options';
 import { PubSubJobQueueStrategy } from './pub-sub-job-queue-strategy';
 
+/**
+ * @description
+ * This plugin uses Google Cloud Pub/Sub to implement a job queue strategy for Vendure.
+ *
+ * ## Installation
+ *
+ * Note: To use this plugin, you need to manually install the `@google-cloud/pubsub` package:
+ *
+ * ```shell
+ * npm install @google-cloud/pubsub@^2.8.0
+ * ```
+ *
+ * @deprecated The Pub/Sub plugin is moving to `@vendure-community/pub-sub-plugin`.
+ * It will be removed from `@vendure/job-queue-plugin` in Vendure v3.6.0.
+ * The BullMQ plugin remains in `@vendure/job-queue-plugin`.
+ *
+ * @docsCategory core plugins/JobQueuePlugin
+ */
 @VendurePlugin({
     imports: [PluginCommonModule],
     providers: [
@@ -15,6 +33,7 @@ import { PubSubJobQueueStrategy } from './pub-sub-job-queue-strategy';
         config.jobQueueOptions.jobQueueStrategy = new PubSubJobQueueStrategy();
         return config;
     },
+    compatibility: '^3.0.0',
 })
 export class PubSubPlugin {
     private static options: PubSubOptions;

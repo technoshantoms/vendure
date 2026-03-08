@@ -20,6 +20,7 @@ import { IfDirectiveBase } from './if-directive-base';
  */
 @Directive({
     selector: '[vdrIfMultichannel]',
+    standalone: false,
 })
 export class IfMultichannelDirective extends IfDirectiveBase<[]> {
     constructor(
@@ -27,11 +28,11 @@ export class IfMultichannelDirective extends IfDirectiveBase<[]> {
         templateRef: TemplateRef<any>,
         private dataService: DataService,
     ) {
-        super(_viewContainer, templateRef, () => {
-            return this.dataService.client
+        super(_viewContainer, templateRef, () =>
+            this.dataService.client
                 .userStatus()
-                .mapStream(({ userStatus }) => 1 < userStatus.channels.length);
-        });
+                .mapStream(({ userStatus }) => 1 < userStatus.channels.length),
+        );
     }
 
     /**

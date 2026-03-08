@@ -16,6 +16,7 @@ export type TimelineDisplayType = 'success' | 'error' | 'warning' | 'default' | 
     templateUrl: './timeline-entry.component.html',
     styleUrls: ['./timeline-entry.component.scss'],
     changeDetection: ChangeDetectionStrategy.OnPush,
+    standalone: false,
 })
 export class TimelineEntryComponent {
     @Input() displayType: TimelineDisplayType;
@@ -23,6 +24,7 @@ export class TimelineEntryComponent {
     @Input() name: string;
     @Input() featured: boolean;
     @Input() iconShape?: string | [string, string];
+    @Input() isFirst?: boolean;
     @Input() isLast?: boolean;
     @HostBinding('class.collapsed')
     @Input()

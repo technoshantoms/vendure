@@ -1,21 +1,23 @@
 import { Injectable } from '@nestjs/common';
-import { ConfigurableOperationInput } from '@vendure/common/lib/generated-types';
+import { ConfigurableOperationInput, OrderLineInput } from '@vendure/common/lib/generated-types';
 import { ID } from '@vendure/common/lib/shared-types';
 import { isObject } from '@vendure/common/lib/shared-utils';
 import { unique } from '@vendure/common/lib/unique';
-import { FulfillmentLineSummary } from '@vendure/payments-plugin/e2e/graphql/generated-admin-types';
+import { In, Not } from 'typeorm';
 
 import { RequestContext } from '../../api/common/request-context';
+import { RelationPaths } from '../../api/decorators/relations.decorator';
 import {
     CreateFulfillmentError,
     FulfillmentStateTransitionError,
     InvalidFulfillmentHandlerError,
 } from '../../common/error/generated-graphql-admin-errors';
+import { Instrument } from '../../common/instrument-decorator';
 import { ConfigService } from '../../config/config.service';
 import { TransactionalConnection } from '../../connection/transactional-connection';
 import { Fulfillment } from '../../entity/fulfillment/fulfillment.entity';
-import { OrderLine } from '../../entity/index';
-import { OrderItem } from '../../entity/order-item/order-item.entity';
+import { FulfillmentLine } from '../../entity/order-line-reference/fulfillment-line.entity';
+import { OrderLine } from '../../entity/order-line/order-line.entity';
 import { Order } from '../../entity/order/order.entity';
 import { EventBus } from '../../event-bus/event-bus';
 import { FulfillmentEvent } from '../../event-bus/events/fulfillment-event';
@@ -23,7 +25,6 @@ import { FulfillmentStateTransitionEvent } from '../../event-bus/events/fulfillm
 import { CustomFieldRelationService } from '../helpers/custom-field-relation/custom-field-relation.service';
 import { FulfillmentState } from '../helpers/fulfillment-state-machine/fulfillment-state';
 import { FulfillmentStateMachine } from '../helpers/fulfillment-state-machine/fulfillment-state-machine';
-
 /**
  * @description
  * Contains methods relating to {@link Fulfillment} entities.
@@ -31,6 +32,7 @@ import { FulfillmentStateMachine } from '../helpers/fulfillment-state-machine/fu
  * @docsCategory services
  */
 @Injectable()
+@Instrument()
 export class FulfillmentService {
     constructor(
         private connection: TransactionalConnection,
@@ -48,7 +50,7 @@ export class FulfillmentService {
     async create(
         ctx: RequestContext,
         orders: Order[],
-        items: OrderItem[],
+        lines: OrderLineInput[],
         handler: ConfigurableOperationInput,
     ): Promise<Fulfillment | InvalidFulfillmentHandlerError | CreateFulfillmentError> {
         const fulfillmentHandler = this.configService.shippingOptions.fulfillmentHandlers.find(
@@ -62,7 +64,7 @@ export class FulfillmentService {
             fulfillmentPartial = await fulfillmentHandler.createFulfillment(
                 ctx,
                 orders,
-                items,
+                lines,
                 handler.arguments,
             );
         } catch (e: unknown) {
@@ -70,116 +72,78 @@ export class FulfillmentService {
             if (isObject(e)) {
                 message = (e as any).message || e.toString();
             }
-            return new CreateFulfillmentError(message);
+            return new CreateFulfillmentError({ fulfillmentHandlerError: message });
         }
+
+        const orderLines = await this.connection
+            .getRepository(ctx, OrderLine)
+            .find({ where: { id: In(lines.map(l => l.orderLineId)) } });
 
         const newFulfillment = await this.connection.getRepository(ctx, Fulfillment).save(
             new Fulfillment({
                 method: '',
                 trackingCode: '',
                 ...fulfillmentPartial,
-                orderItems: items,
+                lines: [],
                 state: this.fulfillmentStateMachine.getInitialState(),
                 handlerCode: fulfillmentHandler.code,
             }),
         );
+        const fulfillmentLines: FulfillmentLine[] = [];
+        for (const { orderLineId, quantity } of lines) {
+            const fulfillmentLine = await this.connection.getRepository(ctx, FulfillmentLine).save(
+                new FulfillmentLine({
+                    orderLineId,
+                    quantity,
+                }),
+            );
+            fulfillmentLines.push(fulfillmentLine);
+        }
+        await this.connection
+            .getRepository(ctx, Fulfillment)
+            .createQueryBuilder()
+            .relation('lines')
+            .of(newFulfillment)
+            .add(fulfillmentLines);
         const fulfillmentWithRelations = await this.customFieldRelationService.updateRelations(
             ctx,
             Fulfillment,
             fulfillmentPartial,
             newFulfillment,
         );
-        this.eventBus.publish(
+        await this.eventBus.publish(
             new FulfillmentEvent(ctx, fulfillmentWithRelations, {
                 orders,
-                items,
+                lines,
                 handler,
             }),
         );
         return newFulfillment;
     }
 
-    private async findOneOrThrow(
-        ctx: RequestContext,
-        id: ID,
-        relations: string[] = ['orderItems'],
-    ): Promise<Fulfillment> {
-        return await this.connection.getEntityOrThrow(ctx, Fulfillment, id, {
-            relations,
-        });
+    async getFulfillmentLines(ctx: RequestContext, id: ID): Promise<FulfillmentLine[]> {
+        return this.connection
+            .getEntityOrThrow(ctx, Fulfillment, id, {
+                relations: ['lines'],
+            })
+            .then(fulfillment => fulfillment.lines);
     }
 
-    /**
-     * @description
-     * Returns all OrderItems associated with the specified Fulfillment.
-     */
-    async getOrderItemsByFulfillmentId(ctx: RequestContext, id: ID): Promise<OrderItem[]> {
-        const fulfillment = await this.findOneOrThrow(ctx, id);
-        return fulfillment.orderItems;
-    }
-
-    async getFulfillmentLineSummary(
-        ctx: RequestContext,
-        id: ID,
-    ): Promise<Array<{ orderLine: OrderLine; quantity: number }>> {
-        const result = await this.connection
-            .getRepository(ctx, OrderLine)
-            .createQueryBuilder('line')
-            .leftJoinAndSelect('line.items', 'item')
-            .leftJoin('item.fulfillments', 'fulfillment')
-            .select('line.id', 'lineId')
-            .addSelect('COUNT(item.id)', 'itemCount')
-            .groupBy('line.id')
-            .where('fulfillment.id = :id', { id })
-            .getRawMany();
-
-        return Promise.all(
-            result.map(async ({ lineId, itemCount }: { lineId: ID; itemCount: string }) => {
-                return {
-                    orderLine: await this.connection.getEntityOrThrow(ctx, OrderLine, lineId),
-                    quantity: +itemCount,
-                };
-            }),
-        );
-    }
-
-    async getFulfillmentsByOrderLineId(
+    async getFulfillmentsLinesForOrderLine(
         ctx: RequestContext,
         orderLineId: ID,
-    ): Promise<Array<{ fulfillment: Fulfillment; orderItemIds: Set<ID> }>> {
-        const itemIdsQb = await this.connection
-            .getRepository(ctx, OrderItem)
-            .createQueryBuilder('item')
-            .select('item.id', 'id')
-            .where('item.lineId = :orderLineId', { orderLineId });
-
-        const fulfillments = await this.connection
-            .getRepository(ctx, Fulfillment)
-            .createQueryBuilder('fulfillment')
-            .leftJoinAndSelect('fulfillment.orderItems', 'item')
-            .where(`item.id IN (${itemIdsQb.getQuery()})`)
-            .andWhere('fulfillment.state != :cancelledState', { cancelledState: 'Cancelled' })
-            .setParameters(itemIdsQb.getParameters())
-            .getMany();
-
-        return fulfillments.map(fulfillment => ({
-            fulfillment,
-            orderItemIds: new Set(fulfillment.orderItems.map(i => i.id)),
-        }));
-    }
-
-    /**
-     * @description
-     * Returns the Fulfillment for the given OrderItem (if one exists).
-     */
-    async getFulfillmentByOrderItemId(
-        ctx: RequestContext,
-        orderItemId: ID,
-    ): Promise<Fulfillment | undefined> {
-        const orderItem = await this.connection
-            .getRepository(ctx, OrderItem)
-            .findOne(orderItemId, { relations: ['fulfillments'] });
-        return orderItem?.fulfillment;
+        relations: RelationPaths<FulfillmentLine> = [],
+    ): Promise<FulfillmentLine[]> {
+        const defaultRelations = ['fulfillment'];
+        return this.connection.getRepository(ctx, FulfillmentLine).find({
+            relations: Array.from(new Set([...defaultRelations, ...relations])),
+            where: {
+                fulfillment: {
+                    state: Not('Cancelled'),
+                },
+                orderLineId,
+            },
+        });
     }
 
     /**
@@ -200,24 +164,28 @@ export class FulfillmentService {
           }
         | FulfillmentStateTransitionError
     > {
-        const fulfillment = await this.findOneOrThrow(ctx, fulfillmentId, ['orderItems']);
-        const lineIds = unique(fulfillment.orderItems.map(item => item.lineId));
+        const fulfillment = await this.connection.getEntityOrThrow(ctx, Fulfillment, fulfillmentId, {
+            relations: ['lines'],
+        });
+        const orderLinesIds = unique(fulfillment.lines.map(lines => lines.orderLineId));
         const orders = await this.connection
             .getRepository(ctx, Order)
             .createQueryBuilder('order')
             .leftJoinAndSelect('order.lines', 'line')
-            .where('line.id IN (:...lineIds)', { lineIds })
+            .where('line.id IN (:...lineIds)', { lineIds: orderLinesIds })
             .getMany();
         const fromState = fulfillment.state;
+        let finalize: () => Promise<any>;
         try {
-            await this.fulfillmentStateMachine.transition(ctx, fulfillment, orders, state);
-        } catch (e) {
+            const result = await this.fulfillmentStateMachine.transition(ctx, fulfillment, orders, state);
+            finalize = result.finalize;
+        } catch (e: any) {
             const transitionError = ctx.translate(e.message, { fromState, toState: state });
-            return new FulfillmentStateTransitionError(transitionError, fromState, state);
+            return new FulfillmentStateTransitionError({ transitionError, fromState, toState: state });
         }
         await this.connection.getRepository(ctx, Fulfillment).save(fulfillment, { reload: false });
-        this.eventBus.publish(new FulfillmentStateTransitionEvent(fromState, state, ctx, fulfillment));
-
+        await this.eventBus.publish(new FulfillmentStateTransitionEvent(fromState, state, ctx, fulfillment));
+        await finalize();
         return { fulfillment, orders, fromState, toState: state };
     }
 
@@ -225,7 +193,7 @@ export class FulfillmentService {
      * @description
      * Returns an array of the next valid states for the Fulfillment.
      */
-    getNextStates(fulfillment: Fulfillment): ReadonlyArray<FulfillmentState> {
+    getNextStates(fulfillment: Fulfillment): readonly FulfillmentState[] {
         return this.fulfillmentStateMachine.getNextStates(fulfillment);
     }
 }

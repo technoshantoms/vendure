@@ -16,6 +16,7 @@ export interface PermissionGridRow {
     templateUrl: './permission-grid.component.html',
     styleUrls: ['./permission-grid.component.scss'],
     changeDetection: ChangeDetectionStrategy.OnPush,
+    standalone: false
 })
 export class PermissionGridComponent implements OnInit {
     @Input() permissionDefinitions: PermissionDefinition[];
@@ -67,13 +68,11 @@ export class PermissionGridComponent implements OnInit {
                 description: d.description,
                 permissions: [d],
             })),
-            ...Array.from(crudGroups.entries()).map(([label, defs]) => {
-                return {
+            ...Array.from(crudGroups.entries()).map(([label, defs]) => ({
                     label,
                     description: this.extractCrudDescription(defs[0]),
                     permissions: defs,
-                };
-            }),
+                })),
         ];
     }
 

@@ -1,11 +1,4 @@
-import {
-    AfterContentInit,
-    ChangeDetectionStrategy,
-    Component,
-    ContentChild,
-    Input,
-    OnInit,
-} from '@angular/core';
+import { Component, ContentChild, EventEmitter, Input, OnInit, Output } from '@angular/core';
 
 import { FormFieldControlDirective } from './form-field-control.directive';
 
@@ -17,6 +10,7 @@ import { FormFieldControlDirective } from './form-field-control.directive';
     selector: 'vdr-form-field',
     templateUrl: './form-field.component.html',
     styleUrls: ['./form-field.component.scss'],
+    standalone: false,
 })
 export class FormFieldComponent implements OnInit {
     @Input() label: string;
@@ -32,6 +26,7 @@ export class FormFieldComponent implements OnInit {
      * will be displayed which allows the field to be edited.
      */
     @Input() readOnlyToggle = false;
+    @Output() readOnlyToggleChange = new EventEmitter<boolean>();
     @ContentChild(FormFieldControlDirective, { static: true }) formFieldControl: FormFieldControlDirective;
     isReadOnly = false;
 
@@ -46,6 +41,7 @@ export class FormFieldComponent implements OnInit {
     setReadOnly(value: boolean) {
         this.formFieldControl.setReadOnly(value);
         this.isReadOnly = value;
+        this.readOnlyToggleChange.emit(value);
     }
 
     getErrorMessage(): string | undefined {

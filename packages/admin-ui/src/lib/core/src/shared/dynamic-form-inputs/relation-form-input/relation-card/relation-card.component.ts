@@ -1,5 +1,5 @@
-import { EventEmitter } from '@angular/core';
 import {
+    EventEmitter,
     ChangeDetectionStrategy,
     Component,
     ContentChild,
@@ -11,10 +11,12 @@ import {
 
 @Directive({
     selector: '[vdrRelationCardPreview]',
+    standalone: false,
 })
 export class RelationCardPreviewDirective {}
 @Directive({
     selector: '[vdrRelationCardDetail]',
+    standalone: false,
 })
 export class RelationCardDetailDirective {}
 
@@ -23,6 +25,7 @@ export class RelationCardDetailDirective {}
     templateUrl: './relation-card.component.html',
     styleUrls: ['./relation-card.component.scss'],
     changeDetection: ChangeDetectionStrategy.OnPush,
+    standalone: false,
 })
 export class RelationCardComponent {
     @Input() entity: any;
@@ -30,6 +33,7 @@ export class RelationCardComponent {
     @Input() selectLabel: string;
     @Input() readonly: boolean;
     @Input() removable = true;
+    // eslint-disable-next-line @angular-eslint/no-output-native
     @Output() select = new EventEmitter();
     @Output() remove = new EventEmitter();
     @ContentChild(RelationCardPreviewDirective, { read: TemplateRef })

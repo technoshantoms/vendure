@@ -1,20 +1,21 @@
 import { ChangeDetectionStrategy, ChangeDetectorRef, Component, OnDestroy, OnInit } from '@angular/core';
-import { FormGroup } from '@angular/forms';
-import { ActivatedRoute, Router } from '@angular/router';
+import { UntypedFormGroup } from '@angular/forms';
 import { marker as _ } from '@biesbjerg/ngx-translate-extract-marker';
 import {
-    BaseDetailComponent,
-    CustomFieldConfig,
+    AddressFragment,
+    CreateAddressInput,
     DataService,
     DeletionResult,
     DraftOrderEligibleShippingMethodsQuery,
+    GetCustomerAddressesDocument,
     ModalService,
     NotificationService,
     Order,
-    OrderDetail,
-    ServerConfigService,
+    OrderDetailFragment,
+    OrderDetailQueryDocument,
+    TypedBaseDetailComponent,
 } from '@vendure/admin-ui/core';
-import { combineLatest, Observable, Subject } from 'rxjs';
+import { combineLatest, forkJoin, Observable, of, Subject } from 'rxjs';
 import { switchMap, take } from 'rxjs/operators';
 
 import { OrderTransitionService } from '../../providers/order-transition.service';
@@ -27,32 +28,30 @@ import { SelectShippingMethodDialogComponent } from '../select-shipping-method-d
     templateUrl: './draft-order-detail.component.html',
     styleUrls: ['./draft-order-detail.component.scss'],
     changeDetection: ChangeDetectionStrategy.OnPush,
+    standalone: false,
 })
 export class DraftOrderDetailComponent
-    extends BaseDetailComponent<OrderDetail.Fragment>
+    extends TypedBaseDetailComponent<typeof OrderDetailQueryDocument, 'order'>
     implements OnInit, OnDestroy
 {
-    detailForm = new FormGroup({});
+    customFields = this.getCustomFieldConfig('Order');
+    orderLineCustomFields = this.getCustomFieldConfig('OrderLine');
+    detailForm = new UntypedFormGroup({});
     eligibleShippingMethods$: Observable<
         DraftOrderEligibleShippingMethodsQuery['eligibleShippingMethodsForDraftOrder']
     >;
     nextStates$: Observable<string[]>;
     fetchHistory = new Subject<void>();
-    customFields: CustomFieldConfig[];
-    orderLineCustomFields: CustomFieldConfig[];
     displayCouponCodeInput = false;
 
     constructor(
-        router: Router,
-        route: ActivatedRoute,
-        serverConfigService: ServerConfigService,
         private changeDetector: ChangeDetectorRef,
         protected dataService: DataService,
         private notificationService: NotificationService,
         private modalService: ModalService,
         private orderTransitionService: OrderTransitionService,
     ) {
-        super(route, router, serverConfigService, dataService);
+        super();
     }
 
     ngOnInit() {
@@ -67,8 +66,6 @@ export class DraftOrderDetailComponent
                     ),
             ),
         );
-        this.customFields = this.getCustomFieldConfig('Order');
-        this.orderLineCustomFields = this.getCustomFieldConfig('OrderLine');
     }
 
     ngOnDestroy() {
@@ -115,25 +112,72 @@ export class DraftOrderDetailComponent
             if (this.hasId(result)) {
                 this.dataService.order
                     .setCustomerForDraftOrder(this.id, { customerId: result.id })
+                    .pipe(
+                        switchMap(() => {
+                            return this.dataService.query(GetCustomerAddressesDocument, {
+                                customerId: result.id,
+                            }).single$;
+                        }),
+                        switchMap(({ customer }) => {
+                            const defaultShippingAddress = customer?.addresses?.find(
+                                addr => addr.defaultShippingAddress,
+                            );
+                            const defaultBillingAddress = customer?.addresses?.find(
+                                addr => addr.defaultBillingAddress,
+                            );
+
+                            return forkJoin([
+                                defaultShippingAddress
+                                    ? this.dataService.order.setDraftOrderShippingAddress(
+                                          this.id,
+                                          this.mapToAddressInput(defaultShippingAddress),
+                                      )
+                                    : this.dataService.order.unsetDraftOrderShippingAddress(this.id),
+                                defaultBillingAddress
+                                    ? this.dataService.order.setDraftOrderBillingAddress(
+                                          this.id,
+                                          this.mapToAddressInput(defaultBillingAddress),
+                                      )
+                                    : this.dataService.order.unsetDraftOrderBillingAddress(this.id),
+                            ]);
+                        }),
+                    )
                     .subscribe();
             } else if (result) {
-                this.dataService.order.setCustomerForDraftOrder(this.id, { input: result }).subscribe();
+                const { note, ...input } = result;
+                this.dataService.order.setCustomerForDraftOrder(this.id, { input }).subscribe();
             }
         });
+    }
+
+    private mapToAddressInput(address: AddressFragment): CreateAddressInput {
+        return {
+            fullName: address.fullName,
+            company: address.company,
+            streetLine1: address.streetLine1,
+            streetLine2: address.streetLine2,
+            city: address.city,
+            province: address.province,
+            postalCode: address.postalCode,
+            countryCode: address.country.code,
+            phoneNumber: address.phoneNumber,
+            defaultShippingAddress: address.defaultShippingAddress,
+            defaultBillingAddress: address.defaultBillingAddress,
+        };
     }
 
     setShippingAddress() {
         this.entity$
             .pipe(
                 take(1),
-                switchMap(order => {
-                    return this.modalService.fromComponent(SelectAddressDialogComponent, {
+                switchMap(order =>
+                    this.modalService.fromComponent(SelectAddressDialogComponent, {
                         locals: {
                             customerId: order.customer?.id,
                             currentAddress: order.shippingAddress ?? undefined,
                         },
-                    });
-                }),
+                    }),
+                ),
             )
             .subscribe(result => {
                 if (result) {
@@ -146,14 +190,14 @@ export class DraftOrderDetailComponent
         this.entity$
             .pipe(
                 take(1),
-                switchMap(order => {
-                    return this.modalService.fromComponent(SelectAddressDialogComponent, {
+                switchMap(order =>
+                    this.modalService.fromComponent(SelectAddressDialogComponent, {
                         locals: {
                             customerId: order.customer?.id,
                             currentAddress: order.billingAddress ?? undefined,
                         },
-                    });
-                }),
+                    }),
+                ),
             )
             .subscribe(result => {
                 if (result) {
@@ -229,7 +273,7 @@ export class DraftOrderDetailComponent
         return typeof input === 'object' && !!input.id;
     }
 
-    protected setFormValues(entity: Order.Fragment): void {
+    protected setFormValues(entity: OrderDetailFragment): void {
         // empty
     }
 }

@@ -9,6 +9,7 @@ import { ID, PaginatedList, Type } from '@vendure/common/lib/shared-types';
 import { unique } from '@vendure/common/lib/unique';
 
 import { RequestContext } from '../../api/common/request-context';
+import { Instrument } from '../../common/instrument-decorator';
 import { ListQueryOptions, Taggable } from '../../common/types/common-types';
 import { TransactionalConnection } from '../../connection/transactional-connection';
 import { VendureEntity } from '../../entity/base/base.entity';
@@ -22,8 +23,12 @@ import { ListQueryBuilder } from '../helpers/list-query-builder/list-query-build
  * @docsCategory services
  */
 @Injectable()
+@Instrument()
 export class TagService {
-    constructor(private connection: TransactionalConnection, private listQueryBuilder: ListQueryBuilder) {}
+    constructor(
+        private connection: TransactionalConnection,
+        private listQueryBuilder: ListQueryBuilder,
+    ) {}
 
     findAll(ctx: RequestContext, options?: ListQueryOptions<Tag>): Promise<PaginatedList<Tag>> {
         return this.listQueryBuilder
@@ -36,7 +41,10 @@ export class TagService {
     }
 
     findOne(ctx: RequestContext, tagId: ID): Promise<Tag | undefined> {
-        return this.connection.getRepository(ctx, Tag).findOne(tagId);
+        return this.connection
+            .getRepository(ctx, Tag)
+            .findOne({ where: { id: tagId } })
+            .then(result => result ?? undefined);
     }
 
     create(ctx: RequestContext, input: CreateTagInput) {

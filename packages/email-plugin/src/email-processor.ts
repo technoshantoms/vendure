@@ -1,16 +1,22 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { InternalServerError, Logger } from '@vendure/core';
+import { ModuleRef } from '@nestjs/core';
+import { EventBus, Injector, Logger, RequestContext } from '@vendure/core';
 import fs from 'fs-extra';
 
 import { deserializeAttachments } from './attachment-utils';
-import { isDevModeOptions } from './common';
+import { isDevModeOptions, resolveTransportSettings } from './common';
 import { EMAIL_PLUGIN_OPTIONS, loggerCtx } from './constants';
-import { EmailGenerator } from './email-generator';
-import { EmailSender } from './email-sender';
-import { HandlebarsMjmlGenerator } from './handlebars-mjml-generator';
-import { NodemailerEmailSender } from './nodemailer-email-sender';
-import { TemplateLoader } from './template-loader';
-import { EmailDetails, EmailPluginOptions, EmailTransportOptions, IntermediateEmailDetails } from './types';
+import { EmailSendEvent } from './email-send-event';
+import { EmailGenerator } from './generator/email-generator';
+import { HandlebarsMjmlGenerator } from './generator/handlebars-mjml-generator';
+import { EmailSender } from './sender/email-sender';
+import { NodemailerEmailSender } from './sender/nodemailer-email-sender';
+import {
+    EmailDetails,
+    EmailTransportOptions,
+    InitializedEmailPluginOptions,
+    IntermediateEmailDetails,
+} from './types';
 
 /**
  * This class combines the template loading, generation, and email sending - the actual "work" of
@@ -19,15 +25,16 @@ import { EmailDetails, EmailPluginOptions, EmailTransportOptions, IntermediateEm
  */
 @Injectable()
 export class EmailProcessor {
-    protected templateLoader: TemplateLoader;
     protected emailSender: EmailSender;
     protected generator: EmailGenerator;
-    protected transport: EmailTransportOptions;
 
-    constructor(@Inject(EMAIL_PLUGIN_OPTIONS) protected options: EmailPluginOptions) {}
+    constructor(
+        @Inject(EMAIL_PLUGIN_OPTIONS) protected options: InitializedEmailPluginOptions,
+        private moduleRef: ModuleRef,
+        private eventBus: EventBus,
+    ) {}
 
     async init() {
-        this.templateLoader = new TemplateLoader(this.options.templatePath);
         this.emailSender = this.options.emailSender ? this.options.emailSender : new NodemailerEmailSender();
         this.generator = this.options.emailGenerator
             ? this.options.emailGenerator
@@ -35,38 +42,35 @@ export class EmailProcessor {
         if (this.generator.onInit) {
             await this.generator.onInit.call(this.generator, this.options);
         }
-        if (isDevModeOptions(this.options)) {
-            this.transport = {
-                type: 'file',
-                raw: false,
-                outputPath: this.options.outputPath,
-            };
-        } else {
-            if (!this.options.transport) {
-                throw new InternalServerError(
-                    `When devMode is not set to true, the 'transport' property must be set.`,
-                );
-            }
-            this.transport = this.options.transport;
-        }
-        if (this.transport.type === 'file') {
+        const transport = await this.getTransportSettings();
+        if (transport.type === 'file') {
             // ensure the configured directory exists before
             // we attempt to write files to it
-            const emailPath = this.transport.outputPath;
+            const emailPath = transport.outputPath;
             await fs.ensureDir(emailPath);
         }
     }
 
     async process(data: IntermediateEmailDetails) {
+        const ctx = RequestContext.deserialize(data.ctx);
+        let emailDetails: EmailDetails = {} as any;
         try {
-            const bodySource = await this.templateLoader.loadTemplate(data.type, data.templateFile);
+            const bodySource = await this.options.templateLoader.loadTemplate(
+                new Injector(this.moduleRef),
+                ctx,
+                {
+                    templateName: data.templateFile,
+                    type: data.type,
+                    templateVars: data.templateVars,
+                },
+            );
             const generated = await this.generator.generate(
                 data.from,
                 data.subject,
                 bodySource,
                 data.templateVars,
             );
-            const emailDetails: EmailDetails = {
+            emailDetails = {
                 ...generated,
                 recipient: data.recipient,
                 attachments: deserializeAttachments(data.attachments),
@@ -74,7 +78,11 @@ export class EmailProcessor {
                 bcc: data.bcc,
                 replyTo: data.replyTo,
             };
-            await this.emailSender.send(emailDetails, this.transport);
+            const transportSettings = await this.getTransportSettings(ctx);
+            await this.emailSender.send(emailDetails, transportSettings);
+            await this.eventBus.publish(
+                new EmailSendEvent(ctx, emailDetails, true, undefined, data.metadata),
+            );
             return true;
         } catch (err: unknown) {
             if (err instanceof Error) {
@@ -82,7 +90,30 @@ export class EmailProcessor {
             } else {
                 Logger.error(String(err), loggerCtx);
             }
+
+            await this.eventBus.publish(
+                new EmailSendEvent(ctx, emailDetails, false, err as Error, data.metadata),
+            );
             throw err;
+        }
+    }
+
+    async getTransportSettings(ctx?: RequestContext): Promise<EmailTransportOptions> {
+        const transport = await resolveTransportSettings(this.options, new Injector(this.moduleRef), ctx);
+        if (isDevModeOptions(this.options)) {
+            if (transport && transport.type !== 'file') {
+                Logger.warn(
+                    `The EmailPlugin is running in dev mode. The configured '${transport.type}' transport will be replaced by the 'file' transport.`,
+                    loggerCtx,
+                );
+            }
+            return {
+                type: 'file',
+                raw: false,
+                outputPath: this.options.outputPath,
+            };
+        } else {
+            return transport;
         }
     }
 }

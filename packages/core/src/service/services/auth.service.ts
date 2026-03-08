@@ -6,20 +6,21 @@ import { RequestContext } from '../../api/common/request-context';
 import { InternalServerError } from '../../common/error/errors';
 import { InvalidCredentialsError } from '../../common/error/generated-graphql-admin-errors';
 import {
-    InvalidCredentialsError as ShopInvalidCredentialsError,
     NotVerifiedError,
+    InvalidCredentialsError as ShopInvalidCredentialsError,
 } from '../../common/error/generated-graphql-shop-errors';
+import { Instrument } from '../../common/instrument-decorator';
 import { AuthenticationStrategy } from '../../config/auth/authentication-strategy';
 import {
+    NATIVE_AUTH_STRATEGY_NAME,
     NativeAuthenticationData,
     NativeAuthenticationStrategy,
-    NATIVE_AUTH_STRATEGY_NAME,
 } from '../../config/auth/native-authentication-strategy';
 import { ConfigService } from '../../config/config.service';
 import { TransactionalConnection } from '../../connection/transactional-connection';
+import { ExternalAuthenticationMethod } from '../../entity/authentication-method/external-authentication-method.entity';
 import { AuthenticatedSession } from '../../entity/session/authenticated-session.entity';
 import { User } from '../../entity/user/user.entity';
-import { ExternalAuthenticationMethod } from '../../entity/authentication-method/external-authentication-method.entity';
 import { EventBus } from '../../event-bus/event-bus';
 import { AttemptedLoginEvent } from '../../event-bus/events/attempted-login-event';
 import { LoginEvent } from '../../event-bus/events/login-event';
@@ -34,6 +35,7 @@ import { SessionService } from './session.service';
  * @docsCategory services
  */
 @Injectable()
+@Instrument()
 export class AuthService {
     constructor(
         private connection: TransactionalConnection,
@@ -52,7 +54,7 @@ export class AuthService {
         authenticationMethod: string,
         authenticationData: any,
     ): Promise<AuthenticatedSession | InvalidCredentialsError | NotVerifiedError> {
-        this.eventBus.publish(
+        await this.eventBus.publish(
             new AttemptedLoginEvent(
                 ctx,
                 authenticationMethod,
@@ -64,10 +66,10 @@ export class AuthService {
         const authenticationStrategy = this.getAuthenticationStrategy(apiType, authenticationMethod);
         const authenticateResult = await authenticationStrategy.authenticate(ctx, authenticationData);
         if (typeof authenticateResult === 'string') {
-            return new InvalidCredentialsError(authenticateResult);
+            return new InvalidCredentialsError({ authenticationError: authenticateResult });
         }
         if (!authenticateResult) {
-            return new InvalidCredentialsError('');
+            return new InvalidCredentialsError({ authenticationError: '' });
         }
         return this.createAuthenticatedSessionForUser(ctx, authenticateResult, authenticationStrategy.name);
     }
@@ -88,7 +90,9 @@ export class AuthService {
             user.roles = userWithRoles?.roles || [];
         }
 
-        const extAuths = (user.authenticationMethods ?? []).filter(am => am instanceof ExternalAuthenticationMethod);
+        const extAuths = (user.authenticationMethods ?? []).filter(
+            am => am instanceof ExternalAuthenticationMethod,
+        );
         if (!extAuths.length && this.configService.authOptions.requireVerification && !user.verified) {
             return new NotVerifiedError();
         }
@@ -96,13 +100,13 @@ export class AuthService {
             await this.sessionService.deleteSessionsByActiveOrderId(ctx, ctx.session.activeOrderId);
         }
         user.lastLogin = new Date();
-        await this.connection.getRepository(ctx, User).save(user, { reload: false });
+        await this.connection.getRepository(ctx, User).save(user);
         const session = await this.sessionService.createNewAuthenticatedSession(
             ctx,
             user,
             authenticationStrategyName,
         );
-        this.eventBus.publish(new LoginEvent(ctx, user));
+        await this.eventBus.publish(new LoginEvent(ctx, user));
         return session;
     }
 
@@ -122,7 +126,7 @@ export class AuthService {
         );
         const passwordMatches = await nativeAuthenticationStrategy.verifyUserPassword(ctx, userId, password);
         if (!passwordMatches) {
-            return new InvalidCredentialsError('');
+            return new InvalidCredentialsError({ authenticationError: '' });
         }
         return true;
     }
@@ -145,7 +149,7 @@ export class AuthService {
             if (typeof authenticationStrategy.onLogOut === 'function') {
                 await authenticationStrategy.onLogOut(ctx, session.user);
             }
-            this.eventBus.publish(new LogoutEvent(ctx));
+            await this.eventBus.publish(new LogoutEvent(ctx));
             return this.sessionService.deleteSessionsByUser(ctx, session.user);
         }
     }

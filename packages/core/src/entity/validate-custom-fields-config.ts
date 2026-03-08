@@ -54,7 +54,11 @@ function assertNoDuplicatedCustomFieldNames(entityName: string, customFields: Cu
         .map(f => f.name)
         .reduce(
             (hash, name) => {
-                hash[name] ? hash[name]++ : (hash[name] = 1);
+                if (hash[name]) {
+                    hash[name]++;
+                } else {
+                    hash[name] = 1;
+                }
                 return hash;
             },
             {} as { [name: string]: number },
@@ -100,7 +104,8 @@ function getEntityTranslation(entity: Type<any>): Type<any> | undefined {
     if (translation) {
         const type = translation.type;
         if (typeof type === 'function') {
-            return type();
+            // See https://github.com/microsoft/TypeScript/issues/37663
+            return (type as any)();
         }
     }
 }

@@ -1,9 +1,7 @@
 import { ChangeDetectionStrategy, Component, EventEmitter, Input, Output } from '@angular/core';
 import {
-    GetOrderHistory,
     HistoryEntryComponentService,
     HistoryEntryType,
-    OrderDetail,
     OrderDetailFragment,
     TimelineDisplayType,
     TimelineHistoryEntry,
@@ -14,10 +12,11 @@ import {
     templateUrl: './order-history.component.html',
     styleUrls: ['./order-history.component.scss'],
     changeDetection: ChangeDetectionStrategy.OnPush,
+    standalone: false,
 })
 export class OrderHistoryComponent {
     @Input() order: OrderDetailFragment;
-    @Input() history: GetOrderHistory.Items[];
+    @Input() history: TimelineHistoryEntry[];
     @Output() addNote = new EventEmitter<{ note: string; isPublic: boolean }>();
     @Output() updateNote = new EventEmitter<TimelineHistoryEntry>();
     @Output() deleteNote = new EventEmitter<TimelineHistoryEntry>();
@@ -32,7 +31,7 @@ export class OrderHistoryComponent {
         return !!this.historyEntryComponentService.getComponent(type);
     }
 
-    getDisplayType(entry: GetOrderHistory.Items): TimelineDisplayType {
+    getDisplayType(entry: TimelineHistoryEntry): TimelineDisplayType {
         if (entry.type === HistoryEntryType.ORDER_STATE_TRANSITION) {
             if (entry.data.to === 'Delivered') {
                 return 'success';
@@ -52,7 +51,7 @@ export class OrderHistoryComponent {
             }
         }
         if (entry.type === HistoryEntryType.ORDER_CANCELLATION) {
-            return 'error';
+            return 'warning';
         }
         if (entry.type === HistoryEntryType.ORDER_REFUND_TRANSITION) {
             return 'warning';
@@ -60,7 +59,7 @@ export class OrderHistoryComponent {
         return 'default';
     }
 
-    getTimelineIcon(entry: GetOrderHistory.Items) {
+    getTimelineIcon(entry: TimelineHistoryEntry) {
         if (entry.type === HistoryEntryType.ORDER_STATE_TRANSITION) {
             if (entry.data.to === 'Delivered') {
                 return ['success-standard', 'is-solid'];
@@ -74,11 +73,19 @@ export class OrderHistoryComponent {
                 return 'credit-card';
             }
         }
+        if (entry.type === HistoryEntryType.ORDER_REFUND_TRANSITION) {
+            if (entry.data.to === 'Settled') {
+                return 'credit-card';
+            }
+        }
         if (entry.type === HistoryEntryType.ORDER_NOTE) {
             return 'note';
         }
         if (entry.type === HistoryEntryType.ORDER_MODIFIED) {
             return 'pencil';
+        }
+        if (entry.type === HistoryEntryType.ORDER_CUSTOMER_UPDATED) {
+            return 'switch';
         }
         if (entry.type === HistoryEntryType.ORDER_FULFILLMENT_TRANSITION) {
             if (entry.data.to === 'Shipped') {
@@ -90,7 +97,7 @@ export class OrderHistoryComponent {
         }
     }
 
-    isFeatured(entry: GetOrderHistory.Items): boolean {
+    isFeatured(entry: TimelineHistoryEntry): boolean {
         switch (entry.type) {
             case HistoryEntryType.ORDER_STATE_TRANSITION: {
                 return (
@@ -99,47 +106,65 @@ export class OrderHistoryComponent {
                     entry.data.to === 'Settled'
                 );
             }
+            case HistoryEntryType.ORDER_REFUND_TRANSITION:
+                return entry.data.to === 'Settled';
             case HistoryEntryType.ORDER_PAYMENT_TRANSITION:
                 return entry.data.to === 'Settled' || entry.data.to === 'Cancelled';
             case HistoryEntryType.ORDER_FULFILLMENT_TRANSITION:
                 return entry.data.to === 'Delivered' || entry.data.to === 'Shipped';
             case HistoryEntryType.ORDER_NOTE:
             case HistoryEntryType.ORDER_MODIFIED:
+            case HistoryEntryType.ORDER_CUSTOMER_UPDATED:
                 return true;
             default:
-                return true;
+                return false;
         }
     }
 
-    getFulfillment(entry: GetOrderHistory.Items): OrderDetail.Fulfillments | undefined {
+    getFulfillment(
+        entry: TimelineHistoryEntry,
+    ): NonNullable<OrderDetailFragment['fulfillments']>[number] | undefined {
         if (
             (entry.type === HistoryEntryType.ORDER_FULFILLMENT ||
                 entry.type === HistoryEntryType.ORDER_FULFILLMENT_TRANSITION) &&
             this.order.fulfillments
         ) {
-            return this.order.fulfillments.find(f => f.id === entry.data.fulfillmentId);
+            return this.order.fulfillments.find(f => f.id == entry.data.fulfillmentId);
         }
     }
 
-    getPayment(entry: GetOrderHistory.Items): OrderDetail.Payments | undefined {
+    getPayment(
+        entry: TimelineHistoryEntry,
+    ): NonNullable<OrderDetailFragment['payments']>[number] | undefined {
         if (entry.type === HistoryEntryType.ORDER_PAYMENT_TRANSITION && this.order.payments) {
             return this.order.payments.find(p => p.id === entry.data.paymentId);
         }
     }
 
-    getCancelledItems(entry: GetOrderHistory.Items): Array<{ name: string; quantity: number }> {
+    getRefund(
+        entry: TimelineHistoryEntry,
+    ): NonNullable<OrderDetailFragment['payments']>[number]['refunds'][number] | undefined {
+        if (entry.type === HistoryEntryType.ORDER_REFUND_TRANSITION && this.order.payments) {
+            const allRefunds = this.order.payments.reduce(
+                (refunds, payment) => refunds.concat(payment.refunds),
+                [] as NonNullable<OrderDetailFragment['payments']>[number]['refunds'],
+            );
+            return allRefunds.find(r => r.id === entry.data.refundId);
+        }
+    }
+
+    getCancelledQuantity(entry: TimelineHistoryEntry): number {
+        return entry.data.lines.reduce((total, line) => total + line.quantity, 0);
+    }
+
+    getCancelledItems(
+        cancellationLines: Array<{ orderLineId: string; quantity: number }>,
+    ): Array<{ name: string; quantity: number }> {
         const itemMap = new Map<string, number>();
-        const cancelledItemIds: string[] = entry.data.orderItemIds;
         for (const line of this.order.lines) {
-            for (const item of line.items) {
-                if (cancelledItemIds.includes(item.id)) {
-                    const count = itemMap.get(line.productVariant.name);
-                    if (count != null) {
-                        itemMap.set(line.productVariant.name, count + 1);
-                    } else {
-                        itemMap.set(line.productVariant.name, 1);
-                    }
-                }
+            const cancellationLine = cancellationLines.find(l => l.orderLineId === line.id);
+            if (cancellationLine) {
+                itemMap.set(line.productVariant.name, cancellationLine.quantity);
             }
         }
         return Array.from(itemMap.entries()).map(([name, quantity]) => ({ name, quantity }));
@@ -149,7 +174,7 @@ export class OrderHistoryComponent {
         return this.order.modifications.find(m => m.id === id);
     }
 
-    getName(entry: GetOrderHistory.Items): string {
+    getName(entry: TimelineHistoryEntry): string {
         const { administrator } = entry;
         if (administrator) {
             return `${administrator.firstName} ${administrator.lastName}`;

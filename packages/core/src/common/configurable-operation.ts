@@ -30,7 +30,7 @@ import { InjectableStrategy } from './types/injectable-strategy';
  * component.
  *
  * @example
- * ```TypeScript
+ * ```ts
  * const title: LocalizedStringArray = [
  *   { languageCode: LanguageCode.en, value: 'English Title' },
  *   { languageCode: LanguageCode.de, value: 'German Title' },
@@ -83,7 +83,7 @@ export type ConfigArgDef<T extends ConfigArgType> = T extends 'string'
  * Each argument has a data type, which must be one of {@link ConfigArgType}.
  *
  * @example
- * ```TypeScript
+ * ```ts
  * {
  *   apiKey: { type: 'string' },
  *   maxRetries: { type: 'int' },
@@ -96,7 +96,7 @@ export type ConfigArgDef<T extends ConfigArgType> = T extends 'string'
  * data type. For example, if you want to store an array of strings:
  *
  * @example
- * ```TypeScript
+ * ```ts
  * {
  *   aliases: {
  *     type: 'string',
@@ -111,7 +111,7 @@ export type ConfigArgDef<T extends ConfigArgType> = T extends 'string'
  * When not set, a default input component is used appropriate to the data type.
  *
  * @example
- * ```TypeScript
+ * ```ts
  * {
  *   operator: {
  *     type: 'string',
@@ -296,7 +296,7 @@ export interface ConfigurableOperationDefOptions<T extends ConfigArgs> extends I
  * Here's an example of a ShippingCalculator that injects a service which has been defined in a plugin:
  *
  * @example
- * ```TypeScript
+ * ```ts
  * import { Injector, ShippingCalculator } from '\@vendure/core';
  * import { ShippingRatesService } from './shipping-rates.service';
  *
@@ -439,8 +439,10 @@ function coerceValueToType<T extends ConfigArgs>(
     if (isList) {
         try {
             return (JSON.parse(value) as string[]).map(v => coerceValueToType(v, type, false)) as any;
-        } catch (err) {
-            throw new InternalServerError(`Could not parse list value "${value}": ` + err.message);
+        } catch (err: any) {
+            throw new InternalServerError(
+                `Could not parse list value "${value}": ` + JSON.stringify(err.message),
+            );
         }
     }
     switch (type) {

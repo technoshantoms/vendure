@@ -18,6 +18,7 @@ import { LocaleBasePipe } from './locale-base.pipe';
 @Pipe({
     name: 'localeRegionName',
     pure: false,
+    standalone: false,
 })
 export class LocaleRegionNamePipe extends LocaleBasePipe implements PipeTransform {
     constructor(@Optional() dataService?: DataService, @Optional() changeDetectorRef?: ChangeDetectorRef) {
@@ -39,7 +40,7 @@ export class LocaleRegionNamePipe extends LocaleBasePipe implements PipeTransfor
             return new DisplayNames([activeLocale.replace('_', '-')], { type: 'region' }).of(
                 value.replace('_', '-'),
             );
-        } catch (e) {
+        } catch (e: any) {
             return value;
         }
     }

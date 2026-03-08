@@ -1,15 +1,16 @@
 import { ChangeDetectionStrategy, Component, EventEmitter, Input, Output } from '@angular/core';
-import { Fulfillment, OrderDetail } from '@vendure/admin-ui/core';
+import { FulfillmentFragment, OrderDetailFragment } from '@vendure/admin-ui/core';
 
 @Component({
     selector: 'vdr-fulfillment-card',
     templateUrl: './fulfillment-card.component.html',
     styleUrls: ['./fulfillment-card.component.scss'],
     changeDetection: ChangeDetectionStrategy.OnPush,
+    standalone: false,
 })
 export class FulfillmentCardComponent {
-    @Input() fulfillment: Fulfillment.Fragment | undefined;
-    @Input() order: OrderDetail.Fragment;
+    @Input() fulfillment: FulfillmentFragment | undefined;
+    @Input() order: OrderDetailFragment;
     @Output() transitionState = new EventEmitter<string>();
 
     nextSuggestedState(): string | undefined {

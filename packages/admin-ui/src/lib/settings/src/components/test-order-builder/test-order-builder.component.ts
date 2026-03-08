@@ -3,8 +3,10 @@ import {
     CurrencyCode,
     DataService,
     LocalStorageService,
-    ProductSelectorSearch,
+    ProductSelectorSearchQuery,
 } from '@vendure/admin-ui/core';
+
+type SearchItem = ProductSelectorSearchQuery['search']['items'][number];
 
 export interface TestOrderLine {
     id: string;
@@ -20,6 +22,7 @@ export interface TestOrderLine {
     templateUrl: './test-order-builder.component.html',
     styleUrls: ['./test-order-builder.component.scss'],
     changeDetection: ChangeDetectionStrategy.OnPush,
+    standalone: false
 })
 export class TestOrderBuilderComponent implements OnInit {
     @Output() orderLinesChange = new EventEmitter<TestOrderLine[]>();
@@ -37,17 +40,17 @@ export class TestOrderBuilderComponent implements OnInit {
             this.orderLinesChange.emit(this.lines);
         }
         this.dataService.settings.getActiveChannel('cache-first').single$.subscribe(result => {
-            this.currencyCode = result.activeChannel.currencyCode;
+            this.currencyCode = result.activeChannel.defaultCurrencyCode;
         });
     }
 
-    selectResult(result: ProductSelectorSearch.Items) {
+    selectResult(result: SearchItem) {
         if (result) {
             this.addToLines(result);
         }
     }
 
-    private addToLines(result: ProductSelectorSearch.Items) {
+    private addToLines(result: SearchItem) {
         if (!this.lines.find(l => l.id === result.productVariantId)) {
             this.lines.push({
                 id: result.productVariantId,

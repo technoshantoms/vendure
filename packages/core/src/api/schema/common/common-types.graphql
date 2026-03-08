@@ -3,6 +3,9 @@ scalar JSON
 scalar DateTime
 scalar Upload
 
+# Our custom scalars
+scalar Money
+
 interface PaginatedList {
     items: [Node!]!
     totalItems: Int!
@@ -21,7 +24,8 @@ type Adjustment {
     adjustmentSource: String!
     type: AdjustmentType!
     description: String!
-    amount: Int!
+    amount: Money!
+    data: JSON
 }
 
 type TaxLine {
@@ -174,7 +178,9 @@ input SearchInput {
     facetValueOperator: LogicalOperator @deprecated(reason: "Use `facetValueFilters` instead")
     facetValueFilters: [FacetValueFilterInput!]
     collectionId: ID
+    collectionIds: [ID!]
     collectionSlug: String
+    collectionSlugs: [String!]
     groupByProduct: Boolean
     take: Int
     skip: Int
@@ -194,6 +200,13 @@ input CreateCustomerInput {
     emailAddress: String!
 }
 
+"""
+Input used to create an Address.
+
+The countryCode must correspond to a `code` property of a Country that has been defined in the
+Vendure server. The `code` property is typically a 2-character ISO code such as "GB", "US", "DE" etc.
+If an invalid code is passed, the mutation will fail.
+"""
 input CreateAddressInput {
     fullName: String
     company: String
@@ -208,6 +221,13 @@ input CreateAddressInput {
     defaultBillingAddress: Boolean
 }
 
+"""
+Input used to update an Address.
+
+The countryCode must correspond to a `code` property of a Country that has been defined in the
+Vendure server. The `code` property is typically a 2-character ISO code such as "GB", "US", "DE" etc.
+If an invalid code is passed, the mutation will fail.
+"""
 input UpdateAddressInput {
     id: ID!
     fullName: String
@@ -232,8 +252,8 @@ type Success {
 
 type ShippingMethodQuote {
     id: ID!
-    price: Int!
-    priceWithTax: Int!
+    price: Money!
+    priceWithTax: Money!
     code: String!
     name: String!
     description: String!
@@ -256,7 +276,9 @@ union UpdateOrderItemsResult =
     | OrderLimitError
     | NegativeQuantityError
     | InsufficientStockError
-union RemoveOrderItemsResult = Order | OrderModificationError
+    | OrderInterceptorError
+
+union RemoveOrderItemsResult = Order | OrderModificationError | OrderInterceptorError
 union SetOrderShippingMethodResult =
       Order
     | OrderModificationError

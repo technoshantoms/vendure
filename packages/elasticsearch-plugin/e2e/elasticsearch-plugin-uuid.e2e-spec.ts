@@ -1,28 +1,21 @@
-import { DefaultJobQueuePlugin, DefaultLogger, LogLevel, mergeConfig, UuidIdStrategy } from '@vendure/core';
+import { DefaultJobQueuePlugin, mergeConfig, UuidIdStrategy } from '@vendure/core';
 import { createTestEnvironment } from '@vendure/testing';
-import gql from 'graphql-tag';
 import path from 'path';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { initialData } from '../../../e2e-common/e2e-initial-data';
-import { testConfig, TEST_SETUP_TIMEOUT_MS } from '../../../e2e-common/test-config';
-import { SearchProductsShop } from '../../core/e2e/graphql/generated-e2e-shop-types';
-import { SEARCH_PRODUCTS_SHOP } from '../../core/e2e/graphql/shop-definitions';
+import { TEST_SETUP_TIMEOUT_MS, testConfig } from '../../../e2e-common/test-config';
+import { searchProductsShopDocument } from '../../core/e2e/graphql/shop-definitions';
 import { awaitRunningJobs } from '../../core/e2e/utils/await-running-jobs';
 import { ElasticsearchPlugin } from '../src/plugin';
 
-import { GetCollectionList } from './graphql/generated-e2e-elasticsearch-plugin-types';
-// tslint:disable-next-line:no-var-requires
+import { graphql } from './graphql/graphql-admin';
+import { graphql as shopGraphql } from './graphql/graphql-shop';
+
+// eslint-disable-next-line @typescript-eslint/no-var-requires
 const { elasticsearchHost, elasticsearchPort } = require('./constants');
 
-/**
- * The Elasticsearch tests sometimes take a long time in CI due to limited resources.
- * We increase the timeout to 30 seconds to prevent failure due to timeouts.
- */
-if (process.env.CI) {
-    jest.setTimeout(10 * 3000);
-}
-
-// https://github.com/vendure-ecommerce/vendure/issues/494
+// https://github.com/vendurehq/vendure/issues/494
 describe('Elasticsearch plugin with UuidIdStrategy', () => {
     const { server, adminClient, shopClient } = createTestEnvironment(
         mergeConfig(testConfig(), {
@@ -46,7 +39,10 @@ describe('Elasticsearch plugin with UuidIdStrategy', () => {
             customerCount: 1,
         });
         await adminClient.asSuperAdmin();
-        await adminClient.query(REINDEX);
+        // We have extra time here because a lot of jobs are
+        // triggered from all the product updates
+        await awaitRunningJobs(adminClient, 10_000, 1000);
+        await adminClient.query(reindexDocument);
         await awaitRunningJobs(adminClient);
     }, TEST_SETUP_TIMEOUT_MS);
 
@@ -55,46 +51,56 @@ describe('Elasticsearch plugin with UuidIdStrategy', () => {
     });
 
     it('no term or filters', async () => {
-        const { search } = await shopClient.query<SearchProductsShop.Query, SearchProductsShop.Variables>(
-            SEARCH_PRODUCTS_SHOP,
-            {
-                input: {
-                    groupByProduct: true,
-                },
+        const { search } = await shopClient.query(searchProductsShopDocument, {
+            input: {
+                groupByProduct: true,
             },
-        );
-        expect(search.totalItems).toBe(20);
+        });
+        expect(search.totalItems).toBe(21);
+    });
+
+    it('no term or filters grouped by SKU', async () => {
+        const { search } = await shopClient.query(searchProductsShopDocument, {
+            input: {
+                groupBySKU: true,
+            },
+        } as any);
+        expect(search.totalItems).toBe(34);
     });
 
     it('with search term', async () => {
-        const { search } = await shopClient.query<SearchProductsShop.Query, SearchProductsShop.Variables>(
-            SEARCH_PRODUCTS_SHOP,
-            {
-                input: {
-                    groupByProduct: true,
-                    term: 'laptop',
-                },
+        const { search } = await shopClient.query(searchProductsShopDocument, {
+            input: {
+                groupByProduct: true,
+                term: 'laptop',
             },
-        );
+        });
+        expect(search.totalItems).toBe(1);
+    });
+
+    it('with search term grouped by SKU', async () => {
+        const { search } = await shopClient.query(searchProductsShopDocument, {
+            input: {
+                groupBySKU: true,
+                term: 'bonsai',
+            },
+        });
         expect(search.totalItems).toBe(1);
     });
 
     it('with collectionId filter term', async () => {
-        const { collections } = await shopClient.query<GetCollectionList.Query>(GET_COLLECTION_LIST);
-        const { search } = await shopClient.query<SearchProductsShop.Query, SearchProductsShop.Variables>(
-            SEARCH_PRODUCTS_SHOP,
-            {
-                input: {
-                    groupByProduct: true,
-                    collectionId: collections.items[0].id,
-                },
+        const { collections } = await shopClient.query(getCollectionListDocument);
+        const { search } = await shopClient.query(searchProductsShopDocument, {
+            input: {
+                groupByProduct: true,
+                collectionId: collections.items[0].id,
             },
-        );
+        });
         expect(search.items).not.toEqual([]);
     });
 });
 
-const REINDEX = gql`
+const reindexDocument = graphql(`
     mutation Reindex {
         reindex {
             id
@@ -105,9 +111,9 @@ const REINDEX = gql`
             result
         }
     }
-`;
+`);
 
-const GET_COLLECTION_LIST = gql`
+const getCollectionListDocument = shopGraphql(`
     query GetCollectionList {
         collections {
             items {
@@ -116,4 +122,4 @@ const GET_COLLECTION_LIST = gql`
             }
         }
     }
-`;
+`);

@@ -22,14 +22,13 @@ export const fieldsToSelect = [
     'productVariantPreviewFocalPoint',
 ];
 
-export const identifierFields = [
-    'channelId',
-    'productVariantId',
-    'productId',
-    'productAssetId',
-    'productVariantAssetId',
-]
-
-export function getFieldsToSelect(includeStockStatus: boolean = false) {
-    return includeStockStatus ? [...fieldsToSelect, 'inStock', 'productInStock'] : fieldsToSelect;
+export function getFieldsToSelect(includeStockStatus: boolean = false, includeCurrencyCode: boolean = false) {
+    const _fieldsToSelect = [...fieldsToSelect];
+    if (includeStockStatus) {
+        _fieldsToSelect.push('inStock');
+    }
+    if (includeCurrencyCode) {
+        _fieldsToSelect.push('currencyCode');
+    }
+    return _fieldsToSelect;
 }

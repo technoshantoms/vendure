@@ -26,6 +26,8 @@ import { DataTableColumnComponent } from './data-table-column.component';
  * A table for displaying PaginatedList results. It is designed to be used inside components which
  * extend the {@link BaseListComponent} class.
  *
+ * **Deprecated** This component is deprecated. Use the {@link DataTable2Component} instead.
+ *
  * @example
  * ```HTML
  * <vdr-data-table
@@ -79,6 +81,7 @@ import { DataTableColumnComponent } from './data-table-column.component';
  * ```
  *
  * @docsCategory components
+ * @deprecated Use the DataTable2 component instead.
  */
 @Component({
     selector: 'vdr-data-table',
@@ -86,6 +89,7 @@ import { DataTableColumnComponent } from './data-table-column.component';
     styleUrls: ['data-table.component.scss'],
     changeDetection: ChangeDetectionStrategy.OnPush,
     providers: [PaginationService],
+    standalone: false,
 })
 export class DataTableComponent<T> implements AfterContentInit, OnChanges, OnInit, OnDestroy {
     @Input() items: T[];
@@ -100,7 +104,7 @@ export class DataTableComponent<T> implements AfterContentInit, OnChanges, OnIni
     /** @deprecated pass a SelectionManager instance instead */
     @Input() allSelected: boolean;
     /** @deprecated pass a SelectionManager instance instead */
-    @Input() isRowSelectedFn: (item: T) => boolean;
+    @Input() isRowSelectedFn: ((item: T) => boolean) | undefined;
     /** @deprecated pass a SelectionManager instance instead */
     @Output() allSelectChange = new EventEmitter<void>();
     /** @deprecated pass a SelectionManager instance instead */

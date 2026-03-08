@@ -1,13 +1,14 @@
 import { ChangeDetectionStrategy, Component, Input, OnChanges, OnInit, SimpleChanges } from '@angular/core';
 import { DataService } from '@vendure/admin-ui/core';
 import { BehaviorSubject, combineLatest, Observable, Subject } from 'rxjs';
-import { map } from 'rxjs/operators';
+import { map, tap } from 'rxjs/operators';
 
 @Component({
     selector: 'vdr-variant-price-detail',
     templateUrl: './variant-price-detail.component.html',
     styleUrls: ['./variant-price-detail.component.scss'],
     changeDetection: ChangeDetectionStrategy.OnPush,
+    standalone: false,
 })
 export class VariantPriceDetailComponent implements OnInit, OnChanges {
     @Input() priceIncludesTax: boolean;
@@ -50,9 +51,7 @@ export class VariantPriceDetailComponent implements OnInit, OnChanges {
         );
 
         this.grossPrice$ = combineLatest(this.taxRate$, this.priceChange$).pipe(
-            map(([taxRate, price]) => {
-                return Math.round(price * ((100 + taxRate) / 100));
-            }),
+            map(([taxRate, price]) => Math.round(price * ((100 + taxRate) / 100))),
         );
     }
 

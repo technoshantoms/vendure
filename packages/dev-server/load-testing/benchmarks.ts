@@ -1,4 +1,4 @@
-/* tslint:disable:no-console */
+/* eslint-disable no-console */
 import { INestApplication } from '@nestjs/common';
 import { GlobalFlag } from '@vendure/common/lib/generated-types';
 import {
@@ -21,7 +21,7 @@ import { getLoadTestConfig } from './load-test-config';
 
 /**
  * This set of benchmarks aims to specifically test the performance issues discussed
- * in issue https://github.com/vendure-ecommerce/vendure/issues/1506.
+ * in issue https://github.com/vendurehq/vendure/issues/1506.
  *
  * In order to test these issues, we need a test dataset that will create:
  *
@@ -51,7 +51,7 @@ interface Options {
 }
 
 program
-    .option('--script <script>', `Specify the k6 script to run`)
+    .option('--script <script>', 'Specify the k6 script to run')
     .option('--db <db>', 'Select which database to test against', /^(mysql|postgres)$/, 'mysql')
     .option('--populate', 'Whether to populate the database')
     .option('--variant <variant>', 'Which variant of the given script')

@@ -15,6 +15,7 @@ import {
     MutationRemoveProductVariantsFromChannelArgs,
     MutationUpdateProductArgs,
     MutationUpdateProductsArgs,
+    MutationUpdateProductVariantArgs,
     MutationUpdateProductVariantsArgs,
     Permission,
     QueryProductArgs,
@@ -67,13 +68,13 @@ export class ProductResolver {
         if (args.id) {
             const product = await this.productService.findOne(ctx, args.id, relations);
             if (args.slug && product && product.slug !== args.slug) {
-                throw new UserInputError(`error.product-id-slug-mismatch`);
+                throw new UserInputError('error.product-id-slug-mismatch');
             }
             return product;
         } else if (args.slug) {
             return this.productService.findOneBySlug(ctx, args.slug, relations);
         } else {
-            throw new UserInputError(`error.product-id-or-slug-must-be-provided`);
+            throw new UserInputError('error.product-id-or-slug-must-be-provided');
         }
     }
 
@@ -134,7 +135,6 @@ export class ProductResolver {
         @Ctx() ctx: RequestContext,
         @Args() args: MutationUpdateProductsArgs,
     ): Promise<Array<Translated<Product>>> {
-        const { input } = args;
         return await Promise.all(args.input.map(i => this.productService.update(ctx, i)));
     }
 
@@ -176,8 +176,8 @@ export class ProductResolver {
         @Ctx() ctx: RequestContext,
         @Args() args: MutationRemoveOptionGroupFromProductArgs,
     ): Promise<ErrorResultUnion<RemoveOptionGroupFromProductResult, Translated<Product>>> {
-        const { productId, optionGroupId } = args;
-        return this.productService.removeOptionGroupFromProduct(ctx, productId, optionGroupId);
+        const { productId, optionGroupId, force } = args;
+        return this.productService.removeOptionGroupFromProduct(ctx, productId, optionGroupId, force);
     }
 
     @Transaction()
@@ -189,6 +189,17 @@ export class ProductResolver {
     ): Promise<Array<Translated<ProductVariant>>> {
         const { input } = args;
         return this.productVariantService.create(ctx, input);
+    }
+
+    @Transaction()
+    @Mutation()
+    @Allow(Permission.UpdateCatalog, Permission.UpdateProduct)
+    async updateProductVariant(
+        @Ctx() ctx: RequestContext,
+        @Args() args: MutationUpdateProductVariantArgs,
+    ): Promise<Translated<ProductVariant>> {
+        const { input } = args;
+        return this.productVariantService.update(ctx, [input]).then(variants => variants[0]);
     }
 
     @Transaction()

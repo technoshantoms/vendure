@@ -30,9 +30,10 @@ import { ChangeDetectionStrategy, Component, ElementRef, Input } from '@angular/
     templateUrl: './dropdown.component.html',
     styleUrls: ['./dropdown.component.scss'],
     changeDetection: ChangeDetectionStrategy.OnPush,
+    standalone: false,
 })
 export class DropdownComponent {
-    private isOpen = false;
+    isOpen = false;
     private onOpenChangeCallbacks: Array<(isOpen: boolean) => void> = [];
     public trigger: ElementRef;
     @Input() manualToggle = false;

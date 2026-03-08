@@ -12,7 +12,7 @@ export function jsonValidator(): ValidatorFn {
 
         try {
             JSON.parse(control.value);
-        } catch (e) {
+        } catch (e: any) {
             control.setErrors(error);
             return error;
         }
@@ -35,6 +35,7 @@ export function jsonValidator(): ValidatorFn {
     templateUrl: './json-editor-form-input.component.html',
     styleUrls: ['./json-editor-form-input.component.scss'],
     changeDetection: ChangeDetectionStrategy.OnPush,
+    standalone: false,
 })
 export class JsonEditorFormInputComponent
     extends BaseCodeEditorFormInputComponent
@@ -83,7 +84,7 @@ export class JsonEditorFormInputComponent
             getErrorMessage: (json: string): string | undefined => {
                 try {
                     JSON.parse(json);
-                } catch (e) {
+                } catch (e: any) {
                     return e.message;
                 }
                 return;

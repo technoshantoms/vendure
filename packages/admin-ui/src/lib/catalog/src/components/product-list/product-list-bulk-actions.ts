@@ -1,26 +1,30 @@
 import { marker as _ } from '@biesbjerg/ngx-translate-extract-marker';
 import {
     BulkAction,
-    currentChannelIsNotDefault,
+    createBulkRemoveFromChannelAction,
     DataService,
     DeletionResult,
-    getChannelCodeFromUserStatus,
+    DuplicateEntityDialogComponent,
+    GetProductListQuery,
     isMultiChannel,
+    ItemOf,
     ModalService,
     NotificationService,
     Permission,
-    SearchProducts,
 } from '@vendure/admin-ui/core';
 import { unique } from '@vendure/common/lib/unique';
-import { EMPTY, from, of } from 'rxjs';
-import { mapTo, switchMap } from 'rxjs/operators';
+import { EMPTY } from 'rxjs';
+import { map, switchMap } from 'rxjs/operators';
 
 import { AssignProductsToChannelDialogComponent } from '../assign-products-to-channel-dialog/assign-products-to-channel-dialog.component';
 import { BulkAddFacetValuesDialogComponent } from '../bulk-add-facet-values-dialog/bulk-add-facet-values-dialog.component';
 
 import { ProductListComponent } from './product-list.component';
 
-export const deleteProductsBulkAction: BulkAction<SearchProducts.Items, ProductListComponent> = {
+export const deleteProductsBulkAction: BulkAction<
+    ItemOf<GetProductListQuery, 'products'>,
+    ProductListComponent
+> = {
     location: 'product-list',
     label: _('common.delete'),
     icon: 'trash',
@@ -45,9 +49,7 @@ export const deleteProductsBulkAction: BulkAction<SearchProducts.Items, ProductL
             })
             .pipe(
                 switchMap(response =>
-                    response
-                        ? dataService.product.deleteProducts(unique(selection.map(p => p.productId)))
-                        : EMPTY,
+                    response ? dataService.product.deleteProducts(unique(selection.map(p => p.id))) : EMPTY,
                 ),
             )
             .subscribe(result => {
@@ -74,23 +76,24 @@ export const deleteProductsBulkAction: BulkAction<SearchProducts.Items, ProductL
     },
 };
 
-export const assignProductsToChannelBulkAction: BulkAction<SearchProducts.Items, ProductListComponent> = {
+export const assignProductsToChannelBulkAction: BulkAction<
+    ItemOf<GetProductListQuery, 'products'>,
+    ProductListComponent
+> = {
     location: 'product-list',
-    label: _('catalog.assign-to-channel'),
+    label: _('common.assign-to-channel'),
     icon: 'layers',
     requiresPermission: userPermissions =>
         userPermissions.includes(Permission.UpdateCatalog) ||
         userPermissions.includes(Permission.UpdateProduct),
     isVisible: ({ injector }) => isMultiChannel(injector.get(DataService)),
-    onClick: ({ injector, selection, hostComponent, clearSelection }) => {
+    onClick: ({ injector, selection, clearSelection }) => {
         const modalService = injector.get(ModalService);
-        const dataService = injector.get(DataService);
-        const notificationService = injector.get(NotificationService);
         modalService
             .fromComponent(AssignProductsToChannelDialogComponent, {
                 size: 'lg',
                 locals: {
-                    productIds: unique(selection.map(p => p.productId)),
+                    productIds: unique(selection.map(p => p.id)),
                     currentChannelIds: [],
                 },
             })
@@ -102,71 +105,27 @@ export const assignProductsToChannelBulkAction: BulkAction<SearchProducts.Items,
     },
 };
 
-export const removeProductsFromChannelBulkAction: BulkAction<SearchProducts.Items, ProductListComponent> = {
+export const removeProductsFromChannelBulkAction = createBulkRemoveFromChannelAction<
+    ItemOf<GetProductListQuery, 'products'>
+>({
     location: 'product-list',
-    label: _('catalog.remove-from-channel'),
     requiresPermission: userPermissions =>
-        userPermissions.includes(Permission.UpdateChannel) ||
+        userPermissions.includes(Permission.UpdateCatalog) ||
         userPermissions.includes(Permission.UpdateProduct),
-    getTranslationVars: ({ injector }) => getChannelCodeFromUserStatus(injector.get(DataService)),
-    icon: 'layers',
-    iconClass: 'is-warning',
-    isVisible: ({ injector }) => currentChannelIsNotDefault(injector.get(DataService)),
-    onClick: ({ injector, selection, hostComponent, clearSelection }) => {
-        const modalService = injector.get(ModalService);
-        const dataService = injector.get(DataService);
-        const notificationService = injector.get(NotificationService);
-        const activeChannelId$ = dataService.client
-            .userStatus()
-            .mapSingle(({ userStatus }) => userStatus.activeChannelId);
+    getItemName: item => item.name,
+    bulkRemoveFromChannel: (dataService, productIds, channelId) =>
+        dataService.product
+            .removeProductsFromChannel({
+                channelId: channelId,
+                productIds,
+            })
+            .pipe(map(res => res.removeProductsFromChannel)),
+});
 
-        from(getChannelCodeFromUserStatus(injector.get(DataService)))
-            .pipe(
-                switchMap(({ channelCode }) =>
-                    modalService.dialog({
-                        title: _('catalog.remove-from-channel'),
-                        translationVars: {
-                            channelCode,
-                        },
-                        buttons: [
-                            { type: 'secondary', label: _('common.cancel') },
-                            {
-                                type: 'danger',
-                                label: _('common.remove'),
-                                returnValue: true,
-                            },
-                        ],
-                    }),
-                ),
-                switchMap(res =>
-                    res
-                        ? activeChannelId$.pipe(
-                              switchMap(activeChannelId =>
-                                  activeChannelId
-                                      ? dataService.product.removeProductsFromChannel({
-                                            channelId: activeChannelId,
-                                            productIds: selection.map(p => p.productId),
-                                        })
-                                      : EMPTY,
-                              ),
-                              mapTo(true),
-                          )
-                        : of(false),
-                ),
-            )
-            .subscribe(removed => {
-                if (removed) {
-                    clearSelection();
-                    notificationService.success(_('common.notify-remove-products-from-channel-success'), {
-                        count: selection.length,
-                    });
-                    setTimeout(() => hostComponent.refresh(), 1000);
-                }
-            });
-    },
-};
-
-export const assignFacetValuesToProductsBulkAction: BulkAction<SearchProducts.Items, ProductListComponent> = {
+export const assignFacetValuesToProductsBulkAction: BulkAction<
+    ItemOf<GetProductListQuery, 'products'>,
+    ProductListComponent
+> = {
     location: 'product-list',
     label: _('catalog.edit-facet-values'),
     icon: 'tag',
@@ -175,13 +134,9 @@ export const assignFacetValuesToProductsBulkAction: BulkAction<SearchProducts.It
         userPermissions.includes(Permission.UpdateProduct),
     onClick: ({ injector, selection, hostComponent, clearSelection }) => {
         const modalService = injector.get(ModalService);
-        const dataService = injector.get(DataService);
         const notificationService = injector.get(NotificationService);
-        const mode: 'product' | 'variant' = hostComponent.groupByProduct ? 'product' : 'variant';
-        const ids =
-            mode === 'product'
-                ? unique(selection.map(p => p.productId))
-                : unique(selection.map(p => p.productVariantId));
+        const mode = 'product';
+        const ids = unique(selection.map(p => p.id));
         return modalService
             .fromComponent(BulkAddFacetValuesDialogComponent, {
                 size: 'xl',
@@ -197,6 +152,33 @@ export const assignFacetValuesToProductsBulkAction: BulkAction<SearchProducts.It
                         entity: mode === 'product' ? 'Products' : 'ProductVariants',
                     });
                     clearSelection();
+                }
+            });
+    },
+};
+
+export const duplicateProductsBulkAction: BulkAction<
+    ItemOf<GetProductListQuery, 'products'>,
+    ProductListComponent
+> = {
+    location: 'product-list',
+    label: _('common.duplicate'),
+    icon: 'copy',
+    onClick: ({ injector, selection, hostComponent, clearSelection }) => {
+        const modalService = injector.get(ModalService);
+        modalService
+            .fromComponent(DuplicateEntityDialogComponent<ItemOf<GetProductListQuery, 'products'>>, {
+                locals: {
+                    entities: selection,
+                    entityName: 'Product',
+                    title: _('catalog.duplicate-products'),
+                    getEntityName: entity => entity.name,
+                },
+            })
+            .subscribe(result => {
+                if (result) {
+                    clearSelection();
+                    hostComponent.refresh();
                 }
             });
     },

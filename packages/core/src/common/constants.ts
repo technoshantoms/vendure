@@ -1,4 +1,5 @@
 import { LanguageCode } from '@vendure/common/lib/generated-types';
+import { ID } from '@vendure/common/lib/shared-types';
 
 import { CrudPermissionDefinition, PermissionDefinition, PermissionMetadata } from './permission-definition';
 
@@ -25,19 +26,19 @@ export const DEFAULT_PERMISSIONS: PermissionDefinition[] = [
     }),
     new PermissionDefinition({
         name: 'Owner',
-        description: `Owner means the user owns this entity, e.g. a Customer's own Order`,
+        description: "Owner means the user owns this entity, e.g. a Customer's own Order",
         assignable: false,
         internal: true,
     }),
     new PermissionDefinition({
         name: 'Public',
-        description: `Public means any unauthenticated user may perform the operation`,
+        description: 'Public means any unauthenticated user may perform the operation',
         assignable: false,
         internal: true,
     }),
     new PermissionDefinition({
         name: 'UpdateGlobalSettings',
-        description: `Grants permission to update GlobalSettings`,
+        description: 'Grants permission to update GlobalSettings',
         assignable: true,
         internal: false,
     }),
@@ -51,6 +52,7 @@ export const DEFAULT_PERMISSIONS: PermissionDefinition[] = [
             `Grants permission to ${operation} PaymentMethods, ShippingMethods, TaxCategories, TaxRates, Zones, Countries, System & GlobalSettings`,
     ),
     new CrudPermissionDefinition('Administrator'),
+    new CrudPermissionDefinition('ApiKey'),
     new CrudPermissionDefinition('Asset'),
     new CrudPermissionDefinition('Channel'),
     new CrudPermissionDefinition('Collection'),
@@ -66,6 +68,8 @@ export const DEFAULT_PERMISSIONS: PermissionDefinition[] = [
     new CrudPermissionDefinition('Tag'),
     new CrudPermissionDefinition('TaxCategory'),
     new CrudPermissionDefinition('TaxRate'),
+    new CrudPermissionDefinition('Seller'),
+    new CrudPermissionDefinition('StockLocation'),
     new CrudPermissionDefinition('System'),
     new CrudPermissionDefinition('Zone'),
 ];
@@ -74,3 +78,11 @@ export function getAllPermissionsMetadata(customPermissions: PermissionDefinitio
     const allPermissions = [...DEFAULT_PERMISSIONS, ...customPermissions];
     return allPermissions.reduce((all, def) => [...all, ...def.getMetadata()], [] as PermissionMetadata[]);
 }
+
+export const CacheKey = {
+    GlobalSettings: 'GlobalSettings',
+    AllZones: 'AllZones',
+    ActiveTaxZone: (channelId: ID) => `ActiveTaxZone:${channelId}`,
+    ActiveTaxZone_PPA: (channelId: ID) => `ActiveTaxZone_PPA:${channelId}`,
+    CollectionVariantCounts: 'CollectionService.getProductVariantCounts',
+};

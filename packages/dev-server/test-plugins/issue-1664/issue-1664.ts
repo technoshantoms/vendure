@@ -3,8 +3,6 @@ import { DEFAULT_CHANNEL_CODE } from '@vendure/common/lib/shared-constants';
 import {
     Asset,
     Channel,
-    CustomOrderFields,
-    CustomProductFields,
     Order,
     OrderService,
     PluginCommonModule,
@@ -39,7 +37,7 @@ const schema = gql`
 `;
 
 /**
- * Test plugin for https://github.com/vendure-ecommerce/vendure/issues/1664
+ * Test plugin for https://github.com/vendurehq/vendure/issues/1664
  *
  * Test query:
  * ```graphql
@@ -102,7 +100,10 @@ const schema = gql`
     },
 })
 export class Test1664Plugin implements OnApplicationBootstrap {
-    constructor(private connection: TransactionalConnection, private orderService: OrderService) {}
+    constructor(
+        private connection: TransactionalConnection,
+        private orderService: OrderService,
+    ) {}
 
     async onApplicationBootstrap() {
         await this.createDummyProfiles();
@@ -116,7 +117,7 @@ export class Test1664Plugin implements OnApplicationBootstrap {
         }
         // Create a Profile and assign it to all the products
         const users = await this.connection.rawConnection.getRepository(User).find();
-        // tslint:disable-next-line:no-non-null-assertion
+        // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
         const user = users[1]!;
         const profile = await this.connection.rawConnection.getRepository(Profile).save(
             new Profile({
@@ -128,7 +129,7 @@ export class Test1664Plugin implements OnApplicationBootstrap {
         (user.customFields as any).profile = profile;
         await this.connection.rawConnection.getRepository(User).save(user);
 
-        const asset = await this.connection.rawConnection.getRepository(Asset).findOne(1);
+        const asset = await this.connection.rawConnection.getRepository(Asset).findOne({ where: { id: 1 } });
         if (asset) {
             const profileAsset = this.connection.rawConnection.getRepository(ProfileAsset).save({
                 asset,
@@ -170,7 +171,7 @@ export class Test1664Plugin implements OnApplicationBootstrap {
 
         // Create order
         const users = await this.connection.rawConnection.getRepository(User).find();
-        // tslint:disable-next-line:no-non-null-assertion
+        // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
         const customer = users[1]!;
         const created = await this.orderService.create(ctx, customer.id);
 

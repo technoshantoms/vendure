@@ -15,11 +15,11 @@ import { Observable } from 'rxjs';
 import { ModalService } from '../../../../providers/modal/modal.service';
 
 import { ContextMenuService } from './context-menu/context-menu.service';
-import { iframeNode, iframeNodeView } from './custom-nodes';
+import { iframeNode, iframeNodeView, linkMark } from './custom-nodes';
 import { buildInputRules } from './inputrules';
 import { buildKeymap } from './keymap';
 import { customMenuPlugin } from './menu/menu-plugin';
-import { imageContextMenuPlugin } from './plugins/image-plugin';
+import { imageContextMenuPlugin, imageNode } from './plugins/image-plugin';
 import { linkSelectPlugin } from './plugins/link-select-plugin';
 import { rawEditorPlugin } from './plugins/raw-editor-plugin';
 import { getTableNodes, tableContextMenuPlugin } from './plugins/tables-plugin';
@@ -40,12 +40,21 @@ export class ProsemirrorService {
     private mySchema = new Schema({
         nodes: addListNodes(schema.spec.nodes, 'paragraph block*', 'block')
             .append(getTableNodes() as any)
+            .update('image', imageNode)
             .addToEnd('iframe', iframeNode),
-        marks: schema.spec.marks,
+        marks: schema.spec.marks.update('link', linkMark),
     });
     private enabled = true;
+    /**
+     * This is a Document used for processing incoming text. It ensures that malicious HTML is not executed by the
+     * actual document that is attached to the browser DOM, which could cause XSS attacks.
+     */
+    private detachedDoc: Document | null = null;
 
-    constructor(private injector: Injector, private contextMenuService: ContextMenuService) {}
+    constructor(
+        private injector: Injector,
+        private contextMenuService: ContextMenuService,
+    ) {}
 
     contextMenuItems$: Observable<string>;
 
@@ -84,7 +93,9 @@ export class ProsemirrorService {
                 let state = this.getStateFromText(text);
                 if (document.body.contains(this.editorView.dom)) {
                     const fix = fixTables(state);
-                    if (fix) state = state.apply(fix.setMeta('addToHistory', false));
+                    if (fix) {
+                        state = state.apply(fix.setMeta('addToHistory', false));
+                    }
                     this.editorView.updateState(state);
                 }
             }
@@ -108,7 +119,8 @@ export class ProsemirrorService {
     }
 
     private getStateFromText(text: string | null | undefined): EditorState {
-        const div = document.createElement('div');
+        const doc = this.getDetachedDoc();
+        const div = doc.createElement('div');
         div.innerHTML = text ?? '';
         return EditorState.create({
             doc: DOMParser.fromSchema(this.mySchema).parse(div),
@@ -117,7 +129,8 @@ export class ProsemirrorService {
     }
 
     private getTextFromState(state: EditorState): string {
-        const div = document.createElement('div');
+        const doc = this.getDetachedDoc();
+        const div = doc.createElement('div');
         const fragment = DOMSerializer.fromSchema(this.mySchema).serializeFragment(state.doc.content);
 
         div.appendChild(fragment);
@@ -155,5 +168,12 @@ export class ProsemirrorService {
                 },
             }),
         );
+    }
+
+    private getDetachedDoc() {
+        if (!this.detachedDoc) {
+            this.detachedDoc = document.implementation.createHTMLDocument();
+        }
+        return this.detachedDoc;
     }
 }

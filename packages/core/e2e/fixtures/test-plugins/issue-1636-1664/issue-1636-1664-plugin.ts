@@ -5,7 +5,6 @@ import {
     Asset,
     Channel,
     Ctx,
-    Customer,
     PluginCommonModule,
     Product,
     RequestContext,
@@ -16,6 +15,7 @@ import {
 } from '@vendure/core';
 import gql from 'graphql-tag';
 import { Entity, JoinColumn, OneToOne } from 'typeorm';
+import { vi } from 'vitest';
 
 import { ProfileAsset } from './profile-asset.entity';
 import { Profile } from './profile.entity';
@@ -56,11 +56,11 @@ const profileType = gql`
 `;
 
 /**
- * Testing https://github.com/vendure-ecommerce/vendure/issues/1636
+ * Testing https://github.com/vendurehq/vendure/issues/1636
  *
  * and
  *
- * https://github.com/vendure-ecommerce/vendure/issues/1664
+ * https://github.com/vendurehq/vendure/issues/1664
  */
 @VendurePlugin({
     imports: [PluginCommonModule],
@@ -109,7 +109,7 @@ const profileType = gql`
                 nullable: true,
                 type: 'relation',
                 // Using the Channel entity rather than User as in the example comment at
-                // https://github.com/vendure-ecommerce/vendure/issues/1664#issuecomment-1293916504
+                // https://github.com/vendurehq/vendure/issues/1664#issuecomment-1293916504
                 // because using a User causes a recursive infinite loop in TypeORM between
                 // Product > User > Vendor > Product etc.
                 entity: Channel,
@@ -153,9 +153,9 @@ const profileType = gql`
         return config;
     },
 })
-// tslint:disable-next-line:class-name
+// eslint-disable-next-line @typescript-eslint/naming-convention
 export class TestPlugin1636_1664 implements OnApplicationBootstrap {
-    static testResolverSpy = jest.fn();
+    static testResolverSpy = vi.fn();
 
     constructor(private connection: TransactionalConnection) {}
 
@@ -166,7 +166,7 @@ export class TestPlugin1636_1664 implements OnApplicationBootstrap {
         }
         // Create a Profile and assign it to all the products
         const channels = await this.connection.rawConnection.getRepository(Channel).find();
-        // tslint:disable-next-line:no-non-null-assertion
+        // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
         const channel = channels[0]!;
         const profile = await this.connection.rawConnection.getRepository(Profile).save(
             new Profile({
@@ -177,7 +177,7 @@ export class TestPlugin1636_1664 implements OnApplicationBootstrap {
         (channel.customFields as any).profile = profile;
         await this.connection.rawConnection.getRepository(Channel).save(channel);
 
-        const asset = await this.connection.rawConnection.getRepository(Asset).findOne(1);
+        const asset = await this.connection.rawConnection.getRepository(Asset).findOne({ where: { id: 1 } });
         if (asset) {
             const profileAsset = this.connection.rawConnection.getRepository(ProfileAsset).save({
                 asset,

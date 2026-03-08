@@ -1,5 +1,5 @@
 import { ChangeDetectionStrategy, ChangeDetectorRef, Component, Input, OnInit } from '@angular/core';
-import { FormControl } from '@angular/forms';
+import { FormControl, UntypedFormControl } from '@angular/forms';
 import { DefaultFormComponentConfig, DefaultFormComponentId } from '@vendure/common/lib/shared-types';
 
 import { FormInputComponent } from '../../../common/component-registry-types';
@@ -12,10 +12,11 @@ import { ProductMultiSelectorDialogComponent } from '../../components/product-mu
     templateUrl: './product-multi-selector-form-input.component.html',
     styleUrls: ['./product-multi-selector-form-input.component.scss'],
     changeDetection: ChangeDetectionStrategy.OnPush,
+    standalone: false,
 })
 export class ProductMultiSelectorFormInputComponent implements OnInit, FormInputComponent {
     @Input() config: DefaultFormComponentConfig<'product-multi-form-input'>;
-    @Input() formControl: FormControl;
+    @Input() formControl: FormControl<string[] | Array<{ id: string }>>;
     @Input() readonly: boolean;
     mode: 'product' | 'variant' = 'product';
     readonly isListInput = true;
@@ -37,7 +38,9 @@ export class ProductMultiSelectorFormInputComponent implements OnInit, FormInput
                 size: 'xl',
                 locals: {
                     mode: this.mode,
-                    initialSelectionIds: this.formControl.value,
+                    initialSelectionIds: this.formControl.value.map(item =>
+                        typeof item === 'string' ? item : item.id,
+                    ),
                 },
             })
             .subscribe(selection => {
@@ -47,6 +50,7 @@ export class ProductMultiSelectorFormInputComponent implements OnInit, FormInput
                             this.mode === 'product' ? item.productId : item.productVariantId,
                         ),
                     );
+                    this.formControl.markAsDirty();
                     this.changeDetector.markForCheck();
                 }
             });

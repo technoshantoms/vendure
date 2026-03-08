@@ -1,6 +1,6 @@
-// tslint:disable:no-shadowed-variable
+/* eslint-disable no-shadow,@typescript-eslint/no-shadow */
 // prettier-ignore
-import { LanguageCode, LocalizedString } from './generated-types';
+import { LanguageCode,LocalizedString } from './generated-types';
 
 /**
  * A recursive implementation of the Partial<T> type.
@@ -12,12 +12,12 @@ export type DeepPartial<T> = {
         | (T[P] extends Array<infer U>
               ? Array<DeepPartial<U>>
               : T[P] extends ReadonlyArray<infer U>
-              ? ReadonlyArray<DeepPartial<U>>
-              : DeepPartial<T[P]>);
+                ? ReadonlyArray<DeepPartial<U>>
+                : DeepPartial<T[P]>);
 };
-// tslint:enable:no-shadowed-variable
+/* eslint-enable no-shadow, @typescript-eslint/no-shadow */
 
-// tslint:disable:ban-types
+/* eslint-disable @typescript-eslint/ban-types */
 /**
  * A recursive implementation of Required<T>.
  * Source: https://github.com/microsoft/TypeScript/issues/15012#issuecomment-365453623
@@ -29,13 +29,14 @@ export type DeepRequired<T, U extends object | undefined = undefined> = T extend
               : DeepRequired<NonNullable<T[P]>, U>;
       }
     : T;
-// tslint:enable:ban-types
+/* eslint-enable @typescript-eslint/ban-types */
 
 /**
  * A type representing the type rather than instance of a class.
  */
+// eslint-disable-next-line @typescript-eslint/ban-types
 export interface Type<T> extends Function {
-    // tslint:disable-next-line:callable-types
+    // eslint-disable-next-line @typescript-eslint/prefer-function-type
     new (...args: any[]): T;
 }
 
@@ -52,8 +53,8 @@ export type JsonCompatible<T> = {
     [P in keyof T]: T[P] extends Json
         ? T[P]
         : Pick<T, P> extends Required<Pick<T, P>>
-        ? never
-        : JsonCompatible<T[P]>;
+          ? never
+          : JsonCompatible<T[P]>;
 };
 
 /**
@@ -87,13 +88,15 @@ export type ID = string | number;
  * string       | varchar                               | String
  * localeString | varchar                               | String
  * text         | longtext(m), text(p,s)                | String
+ * localeText   | longtext(m), text(p,s)                | String
  * int          | int                                   | Int
  * float        | double precision                      | Float
  * boolean      | tinyint (m), bool (p), boolean (s)    | Boolean
  * datetime     | datetime (m,s), timestamp (p)         | DateTime
+ * struct       | json (m), jsonb (p), text (s)         | JSON
  * relation     | many-to-one / many-to-many relation   | As specified in config
  *
- * Additionally, the CustomFieldType also dictates which [configuration options](/docs/typescript-api/custom-fields/#configuration-options)
+ * Additionally, the CustomFieldType also dictates which [configuration options](/developer-guide/custom-fields/#custom-field-config-properties)
  * are available for that custom field.
  *
  * @docsCategory custom-fields
@@ -106,7 +109,11 @@ export type CustomFieldType =
     | 'boolean'
     | 'datetime'
     | 'relation'
-    | 'text';
+    | 'text'
+    | 'localeText'
+    | 'struct';
+
+export type StructFieldType = 'string' | 'int' | 'float' | 'boolean' | 'datetime' | 'text';
 
 /**
  * @description
@@ -145,9 +152,9 @@ export type DefaultFormComponentId =
     | 'select-form-input'
     | 'text-form-input'
     | 'textarea-form-input'
-    | 'asset-form-input'
     | 'product-multi-form-input'
-    | 'combination-mode-form-input';
+    | 'combination-mode-form-input'
+    | 'struct-form-input';
 
 /**
  * @description
@@ -156,18 +163,18 @@ export type DefaultFormComponentId =
  * @docsCategory ConfigurableOperationDef
  */
 type DefaultFormConfigHash = {
-    'boolean-form-input': {};
-    'currency-form-input': {};
-    'customer-group-form-input': {};
+    'boolean-form-input': Record<string, never>;
+    'currency-form-input': Record<string, never>;
+    'customer-group-form-input': Record<string, never>;
     'date-form-input': { min?: string; max?: string; yearRange?: number };
-    'facet-value-form-input': {};
+    'facet-value-form-input': Record<string, never>;
     'json-editor-form-input': { height?: string };
     'html-editor-form-input': { height?: string };
     'number-form-input': { min?: number; max?: number; step?: number; prefix?: string; suffix?: string };
-    'password-form-input': {};
-    'product-selector-form-input': {};
-    'relation-form-input': {};
-    'rich-text-form-input': {};
+    'password-form-input': Record<string, never>;
+    'product-selector-form-input': Record<string, never>;
+    'relation-form-input': Record<string, never>;
+    'rich-text-form-input': Record<string, never>;
     'select-form-input': {
         options?: Array<{ value: string; label?: Array<Omit<LocalizedString, '__typename'>> }>;
     };
@@ -175,11 +182,11 @@ type DefaultFormConfigHash = {
     'textarea-form-input': {
         spellcheck?: boolean;
     };
-    'asset-form-input': {};
     'product-multi-form-input': {
         selectionMode?: 'product' | 'variant';
     };
-    'combination-mode-form-input': {};
+    'combination-mode-form-input': Record<string, never>;
+    'struct-form-input': Record<string, never>;
 };
 
 export type DefaultFormComponentUiConfig<T extends DefaultFormComponentId | string> =
@@ -209,7 +216,7 @@ export type CustomFieldsObject = { [key: string]: any };
  * The values are loaded at run-time by the Admin UI app, and allow core configuration to be
  * managed without the need to re-build the application.
  *
- * @docsCategory AdminUiPlugin
+ * @docsCategory common/AdminUi
  */
 export interface AdminUiConfig {
     /**
@@ -218,7 +225,7 @@ export interface AdminUiConfig {
      * to. If set to "auto", the Admin UI app will determine the hostname from the
      * current location (i.e. `window.location.hostname`).
      *
-     * @default 'http://localhost'
+     * @default 'auto'
      */
     apiHost: string | 'auto';
     /**
@@ -227,7 +234,7 @@ export interface AdminUiConfig {
      * to. If set to "auto", the Admin UI app will determine the port from the
      * current location (i.e. `window.location.port`).
      *
-     * @default 3000
+     * @default 'auto'
      */
     apiPort: number | 'auto';
     /**
@@ -249,12 +256,19 @@ export interface AdminUiConfig {
     /**
      * @description
      * The header used when using the 'bearer' auth method. Should match the
-     * setting of the server's `authOptions.authTokenHeaderKey` config
-     * option.
+     * setting of the server's `authOptions.authTokenHeaderKey` config option.
      *
      * @default 'vendure-auth-token'
      */
     authTokenHeaderKey: string;
+    /**
+     * @description
+     * The name of the header which contains the channel token. Should match the
+     * setting of the server's `apiOptions.channelTokenKey` config option.
+     *
+     * @default 'vendure-token'
+     */
+    channelTokenKey: string;
     /**
      * @description
      * The default language for the Admin UI. Must be one of the
@@ -266,9 +280,12 @@ export interface AdminUiConfig {
     /**
      * @description
      * The default locale for the Admin UI. The locale affects the formatting of
-     * currencies & dates.
+     * currencies & dates. Must be one of the items specified
+     * in the `availableLocales` property.
      *
      * If not set, the browser default locale will be used.
+     *
+     * @since 2.2.0
      */
     defaultLocale?: string;
     /**
@@ -276,6 +293,13 @@ export interface AdminUiConfig {
      * An array of languages for which translations exist for the Admin UI.
      */
     availableLanguages: LanguageCode[];
+    /**
+     * @description
+     * An array of locales to be used on Admin UI.
+     *
+     * @since 2.2.0
+     */
+    availableLocales: string[];
     /**
      * @description
      * If you are using an external {@link AuthenticationStrategy} for the Admin API, you can configure
@@ -314,7 +338,7 @@ export interface AdminUiConfig {
      * @description
      * Allows you to provide default reasons for a refund or cancellation. This will be used in the
      * refund/cancel dialog. The values can be literal strings (e.g. "Not in stock") or translation
-     * tokens (see [Adding Admin UI Translations](/docs/plugins/extending-the-admin-ui/adding-ui-translations/)).
+     * tokens (see [Adding Admin UI Translations](/extending-the-admin-ui/adding-ui-translations/)).
      *
      * @since 1.5.0
      * @default ['order.cancel-reason-customer-request', 'order.cancel-reason-not-available']
@@ -326,7 +350,7 @@ export interface AdminUiConfig {
  * @description
  * Configures the path to a custom-build of the Admin UI app.
  *
- * @docsCategory common
+ * @docsCategory common/AdminUi
  */
 export interface AdminUiAppConfig {
     /**
@@ -354,7 +378,7 @@ export interface AdminUiAppConfig {
  * @description
  * Information about the Admin UI app dev server.
  *
- * @docsCategory common
+ * @docsCategory common/AdminUi
  */
 export interface AdminUiAppDevModeConfig {
     /**

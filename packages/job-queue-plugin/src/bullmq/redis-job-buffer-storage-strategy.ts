@@ -1,16 +1,19 @@
 import { Injector, Job, JobBufferStorageStrategy, JobConfig, Logger } from '@vendure/core';
-import Redis, { Cluster, RedisOptions } from 'ioredis';
+import { Cluster, Redis, RedisOptions } from 'ioredis';
 
 import { BULLMQ_PLUGIN_OPTIONS, loggerCtx } from './constants';
 import { BullMQPluginOptions } from './types';
+import { getPrefix } from './utils';
 
 const BUFFER_LIST_PREFIX = 'vendure-job-buffer';
 
 export class RedisJobBufferStorageStrategy implements JobBufferStorageStrategy {
-    private redis: Redis.Redis | Redis.Cluster;
+    private redis: Redis | Cluster;
+    private prefix: string;
 
     init(injector: Injector) {
         const options = injector.get<BullMQPluginOptions>(BULLMQ_PLUGIN_OPTIONS);
+        this.prefix = `${getPrefix(options)}:`;
         if (options.connection instanceof Redis) {
             this.redis = options.connection;
         } else if (options.connection instanceof Cluster) {
@@ -49,13 +52,22 @@ export class RedisJobBufferStorageStrategy implements JobBufferStorageStrategy {
     }
 
     private keyName(bufferId: string) {
-        return `${BUFFER_LIST_PREFIX}:${bufferId}`;
+        return `${this.prefix}${BUFFER_LIST_PREFIX}:${bufferId}`;
     }
 
     private toJobConfigString(job: Job<any>): string {
         const jobConfig: JobConfig<any> = {
-            ...job,
+            queueName: job.queueName,
             data: job.data,
+            retries: job.retries,
+            attempts: job.attempts,
+            state: job.state,
+            progress: job.progress,
+            result: job.result,
+            error: job.error,
+            createdAt: job.createdAt,
+            startedAt: job.startedAt,
+            settledAt: job.settledAt,
             id: job.id ?? undefined,
         };
         return JSON.stringify(jobConfig);
@@ -65,16 +77,18 @@ export class RedisJobBufferStorageStrategy implements JobBufferStorageStrategy {
         try {
             const jobConfig: JobConfig<any> = JSON.parse(jobConfigString);
             return new Job(jobConfig);
-        } catch (e) {
-            Logger.error(`Could not parse buffered job:\n${e.message}`, loggerCtx, e.stack);
+        } catch (e: any) {
+            Logger.error(`Could not parse buffered job:\n${JSON.stringify(e.message)}`, loggerCtx, e.stack);
             throw e;
         }
     }
 
     private async getAllBufferIds(): Promise<string[]> {
-        const stream = this.redis.scanStream({
-            match: `${BUFFER_LIST_PREFIX}:*`,
-        });
+        const keyPrefix = `${this.prefix}${BUFFER_LIST_PREFIX}:`;
+        const stream =
+            this.redis instanceof Redis
+                ? this.redis.scanStream({ match: `${keyPrefix}*` })
+                : this.redis.nodes()[0].scanStream({ match: `${keyPrefix}*` });
         const keys = await new Promise<string[]>((resolve, reject) => {
             const allKeys: string[] = [];
             stream.on('data', _keys => allKeys.push(..._keys));
@@ -82,6 +96,6 @@ export class RedisJobBufferStorageStrategy implements JobBufferStorageStrategy {
             stream.on('error', err => reject(err));
         });
 
-        return keys.map(key => key.replace(`${BUFFER_LIST_PREFIX}:`, ''));
+        return keys.map(key => key.replace(keyPrefix, ''));
     }
 }
