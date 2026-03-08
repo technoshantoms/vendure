@@ -1,7 +1,0 @@
-{
-  "name": "test-vendure-project",
-  "version": "1.0.0",
-  "dependencies": {
-    "@vendure/core": "3.3.4"
-  }
-} 

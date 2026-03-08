@@ -1,6 +1,0 @@
-{
-    "type": "commonjs",
-    "name": "npm-plugin",
-    "version": "0.0.1", 
-    "main": "index.ts"
-}
