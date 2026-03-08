@@ -472,7 +472,7 @@ export class IndexerController {
                             0 < (await this.productVariantService.getSaleableStockLevel(ctx, variant));
                         const productInStock = await this.requestContextCache.get(
                             ctx,
-                            `productVariantsStock-${ctx.channelId}-${variant.productId}`,
+                            `productVariantsStock-${variant.productId}`,
                             () =>
                                 this.connection
                                     .getRepository(ctx, ProductVariant)

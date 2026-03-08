@@ -10,7 +10,6 @@ export function ConfigurableOperationListInput({
     fieldDef,
     value,
     onChange,
-    disabled,
 }: Readonly<DashboardFormComponentProps>) {
     if (!fieldDef || isCustomFieldConfig(fieldDef)) {
         return null;
@@ -22,7 +21,7 @@ export function ConfigurableOperationListInput({
                 const field = {
                     value: item,
                     onChange,
-                    disabled: disabled ?? false,
+                    disabled: false,
                     onBlur: () => {},
                     name: fieldDef.name,
                     ref: () => {},

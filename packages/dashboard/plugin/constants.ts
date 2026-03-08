@@ -1,5 +1,5 @@
 import { RwPermissionDefinition } from '@vendure/core';
-import { join } from 'node:path';
+import { join } from 'path';
 
 export const DEFAULT_APP_PATH = join(__dirname, 'dist');
 export const loggerCtx = 'DashboardPlugin';
@@ -15,7 +15,6 @@ export const defaultAvailableLanguages = [
     'pt_PT',
     'zh_Hant',
     'bg',
-    'nl',
 ];
 export const defaultAvailableLocales = [
     'en-US',
@@ -26,7 +25,6 @@ export const defaultAvailableLocales = [
     'pt-BR',
     'pt-PT',
     'bg_BG',
-    'nl-NL',
 ];
 
 export const manageDashboardGlobalViews = new RwPermissionDefinition('DashboardGlobalViews');

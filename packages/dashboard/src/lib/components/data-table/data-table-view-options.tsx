@@ -16,9 +16,7 @@ import {
     DropdownMenuSeparator,
     DropdownMenuTrigger,
 } from '@/vdb/components/ui/dropdown-menu.js';
-// Note: we intentionally don't use Radix ScrollArea here because its viewport
-// doesn't properly resolve height:100% from a flex-computed parent height,
-// preventing scrolling. A plain overflow-y-auto div works correctly in a flex layout.
+import { ScrollArea } from '@/vdb/components/ui/scroll-area.js';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/vdb/components/ui/tooltip.js';
 import { useDynamicTranslations } from '@/vdb/hooks/use-dynamic-translations.js';
 import { usePage } from '@/vdb/hooks/use-page.js';
@@ -95,8 +93,8 @@ export function DataTableViewOptions<TData>({ table }: DataTableViewOptionsProps
                         <Trans>Column settings</Trans>
                     </TooltipContent>
                 </Tooltip>
-                <DropdownMenuContent align="end" className="flex max-h-[70vh] w-max max-w-80 flex-col">
-                    <div className="min-h-0 flex-1 overflow-y-auto">
+                <DropdownMenuContent align="end" className="overflow-auto">
+                    <ScrollArea className="max-h-[60vh]" type="always">
                         <DndContext
                             collisionDetection={closestCenter}
                             onDragEnd={handleDragEnd}
@@ -120,11 +118,11 @@ export function DataTableViewOptions<TData>({ table }: DataTableViewOptionsProps
                                 ))}
                             </SortableContext>
                         </DndContext>
-                    </div>
-                    <DropdownMenuSeparator />
-                    <DropdownMenuItem onClick={handleReset}>
-                        <Trans>Reset</Trans>
-                    </DropdownMenuItem>
+                        <DropdownMenuSeparator />
+                        <DropdownMenuItem onClick={handleReset}>
+                            <Trans>Reset</Trans>
+                        </DropdownMenuItem>
+                    </ScrollArea>
                 </DropdownMenuContent>
             </DropdownMenu>
         </div>

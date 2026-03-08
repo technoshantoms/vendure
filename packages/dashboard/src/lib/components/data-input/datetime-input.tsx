@@ -9,12 +9,11 @@ import { Calendar } from '@/vdb/components/ui/calendar.js';
 import { Popover, PopoverContent, PopoverTrigger } from '@/vdb/components/ui/popover.js';
 import { ScrollArea, ScrollBar } from '@/vdb/components/ui/scroll-area.js';
 import { DashboardFormComponentProps } from '@/vdb/framework/form-engine/form-engine-types.js';
-import { isFieldDisabled } from '@/vdb/framework/form-engine/utils.js';
+import { isReadonlyField } from '@/vdb/framework/form-engine/utils.js';
 import { useDisplayLocale } from '@/vdb/hooks/use-display-locale.js';
 import { cn } from '@/vdb/lib/utils.js';
 import type { Locale } from 'date-fns/locale';
-import { Trans } from '@lingui/react/macro';
-import { CalendarClock, Clock, X } from 'lucide-react';
+import { CalendarClock, X } from 'lucide-react';
 
 /**
  * @description
@@ -39,8 +38,8 @@ export function useDayPickerLocale() {
  * @docsCategory form-components
  * @docsPage DateTimeInput
  */
-export function DateTimeInput({ value, onChange, fieldDef, disabled }: Readonly<DashboardFormComponentProps>) {
-    const readOnly = isFieldDisabled(disabled, fieldDef);
+export function DateTimeInput({ value, onChange, fieldDef }: Readonly<DashboardFormComponentProps>) {
+    const readOnly = isReadonlyField(fieldDef);
     const locale = useDayPickerLocale();
     const date = value && value instanceof Date ? value.toISOString() : (value ?? '');
     const [isOpen, setIsOpen] = React.useState(false);
@@ -52,18 +51,13 @@ export function DateTimeInput({ value, onChange, fieldDef, disabled }: Readonly<
         }
     };
 
-    const handleSetToNow = () => {
-        onChange(new Date().toISOString());
-        setIsOpen(false);
-    };
-
     const handleTimeChange = (type: 'hour' | 'minute' | 'ampm', value: string) => {
         if (date) {
             const newDate = new Date(date);
             if (type === 'hour') {
-                newDate.setHours((Number.parseInt(value) % 12) + (newDate.getHours() >= 12 ? 12 : 0));
+                newDate.setHours((parseInt(value) % 12) + (newDate.getHours() >= 12 ? 12 : 0));
             } else if (type === 'minute') {
-                newDate.setMinutes(Number.parseInt(value));
+                newDate.setMinutes(parseInt(value));
             } else if (type === 'ampm') {
                 const currentHours = newDate.getHours();
                 newDate.setHours(value === 'PM' ? currentHours + 12 : currentHours - 12);
@@ -90,7 +84,6 @@ export function DateTimeInput({ value, onChange, fieldDef, disabled }: Readonly<
                     {date ? (
                         <Button
                             variant="outline"
-                            disabled={readOnly}
                             className="rounded-l-none border-l-0"
                             onClick={e => {
                                 e.stopPropagation();
@@ -114,7 +107,7 @@ export function DateTimeInput({ value, onChange, fieldDef, disabled }: Readonly<
                     <div className="flex flex-col sm:flex-row sm:h-[300px] divide-y sm:divide-y-0 sm:divide-x">
                         <ScrollArea className="w-64 sm:w-auto">
                             <div className="flex sm:flex-col p-2">
-                                {[...hours].reverse().map(hour => (
+                                {hours.reverse().map(hour => (
                                     <Button
                                         key={hour}
                                         size="icon"
@@ -173,17 +166,6 @@ export function DateTimeInput({ value, onChange, fieldDef, disabled }: Readonly<
                                 ))}
                             </div>
                         </ScrollArea>
-                    </div>
-                    <div className="border-t p-2">
-                        <Button
-                            variant="outline"
-                            size="sm"
-                            className="w-full"
-                            onClick={handleSetToNow}
-                        >
-                            <Clock className="mr-2 h-4 w-4" />
-                            <Trans>Now</Trans>
-                        </Button>
                     </div>
                 </div>
             </PopoverContent>

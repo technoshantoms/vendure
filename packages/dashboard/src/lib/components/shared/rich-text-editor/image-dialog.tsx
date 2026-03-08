@@ -57,10 +57,10 @@ export function ImageDialog({ editor, isOpen, onClose }: Readonly<ImageDialogPro
         };
 
         // Only add width/height if they are valid numbers
-        if (width && !Number.isNaN(Number(width))) {
+        if (width && !isNaN(Number(width))) {
             attrs.width = Number(width);
         }
-        if (height && !Number.isNaN(Number(height))) {
+        if (height && !isNaN(Number(height))) {
             attrs.height = Number(height);
         }
 

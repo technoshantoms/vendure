@@ -1,10 +1,9 @@
 import { Money } from '@/vdb/components/data-display/money.js';
-import { FacetValueFacetedFilter } from '@/vdb/components/data-table/data-table-facet-value-faceted-filter.js';
 import { DetailPageButton } from '@/vdb/components/shared/detail-page-button.js';
 import { StockLevelLabel } from '@/vdb/components/shared/stock-level-label.js';
 import { ListPage } from '@/vdb/framework/page/list-page.js';
 import { useLocalFormat } from '@/vdb/hooks/use-local-format.js';
-import { Trans, useLingui } from '@lingui/react/macro';
+import { Trans } from '@lingui/react/macro';
 import { createFileRoute } from '@tanstack/react-router';
 import {
     AssignFacetValuesToProductVariantsBulkAction,
@@ -21,7 +20,6 @@ export const Route = createFileRoute('/_authenticated/_product-variants/product-
 
 function ProductListPage() {
     const { formatCurrencyName } = useLocalFormat();
-    const { t } = useLingui();
     return (
         <ListPage
             pageId="product-variant-list"
@@ -76,21 +74,6 @@ function ProductListPage() {
                 },
                 stockLevels: {
                     cell: ({ row: { original } }) => <StockLevelLabel stockLevels={original.stockLevels} />,
-                },
-            }}
-            additionalColumns={{
-                facetValueId: {
-                    header: '',
-                    cell: () => null,
-                    enableSorting: false,
-                    enableHiding: false,
-                    enableColumnFilter: false,
-                },
-            }}
-            facetedFilters={{
-                facetValueId: {
-                    title: t`Facet values`,
-                    component: FacetValueFacetedFilter,
                 },
             }}
             onSearchTermChange={searchTerm => {

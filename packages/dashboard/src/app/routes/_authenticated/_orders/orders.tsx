@@ -56,7 +56,7 @@ function OrderListPage() {
                     ],
                 };
             }}
-            defaultSort={[{ id: 'updatedAt', desc: true }]}
+            defaultSort={[{ id: 'orderPlacedAt', desc: true }]}
             listQuery={orderListDocument}
             route={Route}
             customizeColumns={{
@@ -92,7 +92,7 @@ function OrderListPage() {
             defaultVisibility={{
                 id: false,
                 createdAt: false,
-                orderPlacedAt: false,
+                updatedAt: false,
                 type: false,
                 currencyCode: false,
             }}

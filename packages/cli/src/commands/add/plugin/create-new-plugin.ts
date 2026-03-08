@@ -134,13 +134,15 @@ export async function createNewPlugin(
             });
         });
 
-        if (isCancel(featureType) || featureType === 'no') {
+        if (isCancel(featureType)) {
+            done = true;
+        }
+        if (featureType === 'no') {
             done = true;
         } else {
-            const command = followUpCommands.find(c => c.id === featureType);
-            if (!command) {
-                break;
-            }
+            // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+            const command = followUpCommands.find(c => c.id === featureType)!;
+            // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
             try {
                 const result = await command.run({ plugin });
                 allModifiedSourceFiles = result.modifiedSourceFiles;

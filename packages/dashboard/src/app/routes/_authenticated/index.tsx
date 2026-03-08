@@ -222,7 +222,7 @@ function DashboardPage() {
                                 className="flex items-center justify-center text-muted-foreground"
                                 style={{ height: '400px' }}
                             >
-                                <Trans>No widgets available</Trans>
+                                No widgets available
                             </div>
                         )}
                     </div>

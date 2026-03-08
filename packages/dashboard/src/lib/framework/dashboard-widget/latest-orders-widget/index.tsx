@@ -5,11 +5,11 @@ import {
     OrderStateCell,
 } from '@/vdb/components/shared/table-cell/order-table-cell-components.js';
 import { Button } from '@/vdb/components/ui/button.js';
-import { useLocalFormat } from '@/vdb/hooks/use-local-format.js';
 import { useUserSettings } from '@/vdb/hooks/use-user-settings.js';
 import { useLingui } from '@lingui/react/macro';
 import { Link } from '@tanstack/react-router';
 import { ColumnFiltersState, SortingState } from '@tanstack/react-table';
+import { formatRelative } from 'date-fns';
 import { useEffect, useState } from 'react';
 import { DashboardBaseWidget } from '../base-widget.js';
 import { useWidgetFilters } from '@/vdb/hooks/use-widget-filters.js';
@@ -19,7 +19,6 @@ export const WIDGET_ID = 'latest-orders-widget';
 
 export function LatestOrdersWidget() {
     const { t } = useLingui();
-    const { formatRelativeDate } = useLocalFormat();
     const { dateRange } = useWidgetFilters();
     const { setTableSettings, settings } = useUserSettings();
     const tableSettings = settings.tableSettings?.[WIDGET_ID];
@@ -109,7 +108,7 @@ export function LatestOrdersWidget() {
                         cell: ({ row }) => {
                             return (
                                 <span className="capitalize">
-                                    {formatRelativeDate(row.original.orderPlacedAt ?? new Date())}
+                                    {formatRelative(row.original.orderPlacedAt ?? new Date(), new Date())}
                                 </span>
                             );
                         },

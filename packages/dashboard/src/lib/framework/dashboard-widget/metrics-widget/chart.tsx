@@ -4,11 +4,9 @@ import { useWidgetDimensions } from '@/vdb/hooks/use-widget-dimensions.js';
 export function MetricsChart({
     chartData,
     formatValue,
-    dataLabel,
 }: {
     chartData: any[];
     formatValue: (value: any) => string;
-    dataLabel: string;
 }) {
     const { width, height } = useWidgetDimensions();
 
@@ -25,21 +23,13 @@ export function MetricsChart({
             <YAxis className="text-xs" color="var(--color-foreground)" tickFormatter={formatValue} />
             <Tooltip
                 formatter={formatValue}
-                contentStyle={{
-                    borderRadius: 4,
-                    padding: 4,
-                    paddingLeft: 8,
-                    paddingRight: 8,
-                    backgroundColor: 'var(--popover)',
-                    borderColor: 'var(--border)',
-                }}
-                labelStyle={{ fontSize: 12, color: 'var(--popover-foreground)' }}
-                itemStyle={{ fontSize: 14, color: 'var(--popover-foreground)' }}
+                contentStyle={{ borderRadius: 4, padding: 4, paddingLeft: 8, paddingRight: 8 }}
+                labelStyle={{ fontSize: 12 }}
+                itemStyle={{ fontSize: 14 }}
             />
             <Area
                 type="monotone"
                 dataKey="sales"
-                name={dataLabel}
                 stroke="var(--color-brand)"
                 strokeWidth={2}
                 strokeOpacity={0.8}

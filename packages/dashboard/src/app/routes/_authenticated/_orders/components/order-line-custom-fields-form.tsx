@@ -4,7 +4,6 @@ import { Form } from '@/vdb/components/ui/form.js';
 import { Popover, PopoverContent, PopoverTrigger } from '@/vdb/components/ui/popover.js';
 import { Trans } from '@lingui/react/macro';
 import { Settings2 } from 'lucide-react';
-import { useEffect, useState } from 'react';
 import { useForm } from 'react-hook-form';
 
 interface OrderLineCustomFieldsFormProps {
@@ -13,24 +12,18 @@ interface OrderLineCustomFieldsFormProps {
 }
 
 export function OrderLineCustomFieldsForm({ onUpdate, value }: Readonly<OrderLineCustomFieldsFormProps>) {
-    const [open, setOpen] = useState(false);
     const form = useForm<Record<string, any>>({
         defaultValues: {
             customFields: value,
         },
     });
 
-    useEffect(() => {
-        form.reset({ customFields: value });
-    }, [value]);
-
     const onSubmit = (values: any) => {
         onUpdate(values.customFields);
-        setOpen(false);
     };
 
     return (
-        <Popover open={open} onOpenChange={setOpen}>
+        <Popover>
             <PopoverTrigger asChild>
                 <Button variant="ghost" size="icon">
                     <Settings2 className="h-4 w-4" />

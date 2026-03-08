@@ -71,7 +71,7 @@ function mapGraphQLCustomFieldToConfig(field: StructField) {
 function parseDate(dateStr: string | undefined | null): Date | undefined {
     if (!dateStr) return undefined;
     const date = new Date(dateStr);
-    return Number.isNaN(date.getTime()) ? undefined : date;
+    return isNaN(date.getTime()) ? undefined : date;
 }
 
 /**
@@ -356,27 +356,6 @@ export function getDefaultValueFromField(field: FieldInfo, defaultLanguageCode?:
     if (field.list) {
         return [];
     }
-    if (field.nullable) {
-        switch (field.type) {
-            case 'String':
-                return '';
-            case 'ID':
-                return '';
-            case 'LanguageCode':
-                return defaultLanguageCode || 'en';
-            case 'Boolean':
-                return false;
-            default:
-                // Object-typed fields (e.g. customFields without typeInfo) should default
-                // to {} to match the Zod schema which expects an object.
-                // JSON scalar is used for customFields when the field structure isn't
-                // known from introspection — it still represents an object at runtime.
-                if (!field.isScalar || field.type === 'JSON') {
-                    return {};
-                }
-                return null;
-        }
-    }
     switch (field.type) {
         case 'String':
         case 'DateTime':
@@ -393,8 +372,9 @@ export function getDefaultValueFromField(field: FieldInfo, defaultLanguageCode?:
             return defaultLanguageCode || 'en';
         case 'JSON':
             return {};
-        default:
+        default: {
             return '';
+        }
     }
 }
 

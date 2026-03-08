@@ -1,5 +1,5 @@
-const path = require('node:path');
-const fs = require('node:fs');
+const path = require('path');
+const fs = require('fs');
 const sass = require('sass');
 
 // Compiles the Admin UI styles into a css file for consumption by

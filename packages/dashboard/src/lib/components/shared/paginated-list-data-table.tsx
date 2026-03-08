@@ -1,6 +1,4 @@
 import { DataTable, FacetedFilter } from '@/vdb/components/data-table/data-table.js';
-import { Alert, AlertDescription, AlertTitle } from '@/vdb/components/ui/alert.js';
-import { Trans } from '@lingui/react/macro';
 import { getObjectPathToPaginatedList } from '@/vdb/framework/document-introspection/get-document-structure.js';
 import { useListQueryFields } from '@/vdb/framework/document-introspection/hooks.js';
 import { api } from '@/vdb/graphql/api.js';
@@ -117,7 +115,7 @@ export type CustomizeColumnConfig<T extends TypedDocumentNode<any, any>> = {
 };
 
 export type FacetedFilterConfig<T extends TypedDocumentNode<any, any>> = {
-    [Key in AllItemFieldKeys<T> | (string & {})]?: FacetedFilter;
+    [Key in AllItemFieldKeys<T>]?: FacetedFilter;
 };
 
 export type ListQueryFields<T extends TypedDocumentNode<any, any>> = {
@@ -443,7 +441,7 @@ export function PaginatedListDataTable<
     ];
     const queryKey = transformQueryKey ? transformQueryKey(defaultQueryKey) : defaultQueryKey;
 
-    const { data, isFetching, error } = useQuery({
+    const { data, isFetching } = useQuery({
         queryFn: () => {
             const searchFilter = onSearchTermChange ? onSearchTermChange(debouncedSearchTerm) : {};
             const mergedFilter = { ...filter, ...searchFilter };
@@ -471,14 +469,6 @@ export function PaginatedListDataTable<
         typeof transformData === 'function' ? transformData(listData?.items ?? []) : (listData?.items ?? []);
     return (
         <PaginatedListContext.Provider value={{ refetchPaginatedList }}>
-            {error && (
-                <Alert variant="destructive" className="mb-4">
-                    <AlertTitle><Trans>Error</Trans></AlertTitle>
-                    <AlertDescription>
-                        {error instanceof Error ? error.message : <Trans>An unknown error occurred</Trans>}
-                    </AlertDescription>
-                </Alert>
-            )}
             <DataTable
                 columns={columns}
                 data={transformedData}

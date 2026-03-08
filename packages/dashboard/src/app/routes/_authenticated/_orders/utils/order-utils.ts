@@ -7,7 +7,6 @@ import { Fulfillment, Order, Payment } from './order-types.js';
 import { ProductVariantInfo } from './use-modify-order.js';
 
 type ModifyOrderInput = VariablesOf<typeof modifyOrderDocument>['input'];
-type WithCustomFields<T> = T & { customFields?: Record<string, any> };
 
 /**
  * Calculates the outstanding payment amount for an order
@@ -100,20 +99,14 @@ export function computePendingOrder(
     input: ModifyOrderInput,
     addedVariants: Map<string, ProductVariantInfo>,
     eligibleShippingMethods?: Array<{ id: string; name: string; priceWithTax: number }>,
-    orderLineCustomFieldNames?: string[],
 ): Order {
     // Adjust lines
     const lines = order.lines.map(line => {
         const adjust = input.adjustOrderLines?.find(l => l.orderLineId === line.id);
-        const adjustCf = (adjust as WithCustomFields<typeof adjust>)?.customFields;
-        const lineCf = (line as WithCustomFields<typeof line>).customFields;
-        return adjust ? { ...line, quantity: adjust.quantity, customFields: adjustCf ?? lineCf } : line;
+        return adjust
+            ? { ...line, quantity: adjust.quantity, customFields: (adjust as any).customFields }
+            : line;
     });
-
-    const customFieldsTemplate =
-        orderLineCustomFieldNames && orderLineCustomFieldNames.length > 0
-            ? Object.fromEntries(orderLineCustomFieldNames.map(k => [k, null]))
-            : undefined;
 
     // Add new items (as AddedLine)
     const addedLines = input.addItems
@@ -133,8 +126,6 @@ export function computePendingOrder(
                       quantity: item.quantity,
                       linePrice: (variantInfo.price ?? 0) * item.quantity,
                       linePriceWithTax: (variantInfo.priceWithTax ?? 0) * item.quantity,
-                      customFields:
-                          (item as WithCustomFields<typeof item>).customFields ?? customFieldsTemplate,
                   } as unknown as Order['lines'][number])
                 : null;
         })
