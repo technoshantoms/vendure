@@ -1,7 +1,7 @@
 import type { DocsPackageManifestInput, FileInfo } from '@vendure-io/docs-provider';
 import { applyLastModifiedDates, createNestedNavigationFromFolder, resolveManifest } from '@vendure-io/docs-provider';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'path';
+import { fileURLToPath } from 'url';
 import { lastModifiedDates } from './dates.generated.js';
 
 const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -359,6 +359,11 @@ const manifestInput: DocsPackageManifestInput = {
                     title: 'Nest DevTools',
                     slug: 'nest-devtools',
                     file: file('docs/guides/developer-guide/nest-devtools/index.mdx'),
+                },
+                {
+                    title: 'Telemetry',
+                    slug: 'telemetry',
+                    file: file('docs/guides/developer-guide/telemetry/index.mdx'),
                 },
             ],
         },

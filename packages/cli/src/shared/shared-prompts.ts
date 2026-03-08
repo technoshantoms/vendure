@@ -1,5 +1,5 @@
 import { cancel, isCancel, multiselect, select, spinner } from '@clack/prompts';
-import path from 'node:path';
+import path from 'path';
 import pc from 'picocolors';
 import { ClassDeclaration, Project } from 'ts-morph';
 

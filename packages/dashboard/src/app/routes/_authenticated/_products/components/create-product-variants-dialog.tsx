@@ -32,8 +32,8 @@ export function CreateProductVariantsDialog({
     productName: string;
     onSuccess?: () => void;
 }) {
-    const { activeChannel } = useChannel();
     const { t } = useLingui();
+    const { activeChannel } = useChannel();
     const [variantData, setVariantData] = useState<VariantConfiguration | null>(null);
     const [open, setOpen] = useState(false);
 
