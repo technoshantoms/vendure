@@ -60,30 +60,18 @@ export class FacetValueService {
         ctxOrLang: RequestContext | LanguageCode,
         lang?: LanguageCode,
     ): Promise<Array<Translated<FacetValue>>> {
-        const [repository, languageCode, channelLanguageCode] =
+        const [repository, languageCode] =
             ctxOrLang instanceof RequestContext
-                ? [
-                      this.connection.getRepository(ctxOrLang, FacetValue),
-                      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-                      lang!,
-                      ctxOrLang.channel.defaultLanguageCode,
-                  ]
-                : [this.connection.rawConnection.getRepository(FacetValue), ctxOrLang, undefined];
-        const globalDefaultLanguageCode = this.configService.defaultLanguageCode;
+                ? // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+                  [this.connection.getRepository(ctxOrLang, FacetValue), lang!]
+                : [this.connection.rawConnection.getRepository(FacetValue), ctxOrLang];
+        // TODO: Implement usage of channelLanguageCode
         return repository
             .find({
                 relations: ['facet'],
             })
             .then(facetValues =>
-                facetValues.map(facetValue =>
-                    translateDeep(
-                        facetValue,
-                        channelLanguageCode
-                            ? [languageCode, channelLanguageCode, globalDefaultLanguageCode]
-                            : [languageCode, globalDefaultLanguageCode],
-                        ['facet'],
-                    ),
-                ),
+                facetValues.map(facetValue => translateDeep(facetValue, languageCode, ['facet'])),
             );
     }
 
