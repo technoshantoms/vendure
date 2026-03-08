@@ -144,13 +144,11 @@ type AlreadyLoggedInError {
   typeLinks={{
     ID: '/reference/graphql-api/shop/object-types#id',
     DateTime: '/reference/graphql-api/shop/object-types#datetime',
-    LanguageCode: '/reference/graphql-api/shop/enums#languagecode',
     String: '/reference/graphql-api/shop/object-types#string',
     AssetType: '/reference/graphql-api/shop/enums#assettype',
     Int: '/reference/graphql-api/shop/object-types#int',
     Coordinate: '/reference/graphql-api/shop/object-types#coordinate',
     Tag: '/reference/graphql-api/shop/object-types#tag',
-    AssetTranslation: '/reference/graphql-api/shop/object-types#assettranslation',
     JSON: '/reference/graphql-api/shop/object-types#json',
   }}
 >
@@ -158,7 +156,6 @@ type AlreadyLoggedInError {
   id: ID!
   createdAt: DateTime!
   updatedAt: DateTime!
-  languageCode: LanguageCode!
   name: String!
   type: AssetType!
   fileSize: Int!
@@ -169,7 +166,6 @@ type AlreadyLoggedInError {
   preview: String!
   focalPoint: Coordinate
   tags: [Tag!]!
-  translations: [AssetTranslation!]!
   customFields: JSON
 }`}
 </GraphQLDoc>
@@ -189,29 +185,6 @@ type AlreadyLoggedInError {
 {`type AssetList {
   items: [Asset!]!
   totalItems: Int!
-}`}
-</GraphQLDoc>
-
-<a name="assettranslation"></a>
-
-## AssetTranslation
-
-<GraphQLDoc
-  type="type"
-  typeName="AssetTranslation"
-  typeLinks={{
-    ID: '/reference/graphql-api/shop/object-types#id',
-    DateTime: '/reference/graphql-api/shop/object-types#datetime',
-    LanguageCode: '/reference/graphql-api/shop/enums#languagecode',
-    String: '/reference/graphql-api/shop/object-types#string',
-  }}
->
-{`type AssetTranslation {
-  id: ID!
-  createdAt: DateTime!
-  updatedAt: DateTime!
-  languageCode: LanguageCode!
-  name: String!
 }`}
 </GraphQLDoc>
 
@@ -860,7 +833,8 @@ type CouponCodeLimitError {
   typeName="DateTime"
   typeLinks={{}}
 >
-{`scalar DateTime`}
+{`"""A date-time string at UTC, such as 2007-12-03T10:15:30Z, compliant with the \`date-time\` format outlined in section 5.6 of the RFC 3339 profile of the ISO 8601 standard for representation of dates and times using the Gregorian calendar."""
+scalar DateTime`}
 </GraphQLDoc>
 
 <a name="datetimecustomfieldconfig"></a>
@@ -1575,7 +1549,8 @@ type InvalidCredentialsError {
   typeName="JSON"
   typeLinks={{}}
 >
-{`scalar JSON`}
+{`"""The \`JSON\` scalar type represents JSON values as specified by [ECMA-404](http://www.ecma-international.org/publications/files/ECMA-ST/ECMA-404.pdf)."""
+scalar JSON`}
 </GraphQLDoc>
 
 <a name="localestringcustomfieldconfig"></a>
@@ -1689,7 +1664,8 @@ type MissingPasswordError {
   typeName="Money"
   typeLinks={{}}
 >
-{`scalar Money`}
+{`"""The \`Money\` scalar type represents monetary values and supports signed double-precision fractional values as specified by [IEEE 754](https://en.wikipedia.org/wiki/IEEE_floating_point)."""
+scalar Money`}
 </GraphQLDoc>
 
 <a name="nativeauthstrategyerror"></a>
@@ -3932,7 +3908,8 @@ union UpdateOrderItemErrorResult = OrderModificationError | OrderLimitError | Ne
   typeName="Upload"
   typeLinks={{}}
 >
-{`scalar Upload`}
+{`"""The \`Upload\` scalar type represents a file upload."""
+scalar Upload`}
 </GraphQLDoc>
 
 <a name="user"></a>

@@ -38,7 +38,6 @@ class VideoTranscoderService {
 
 ```ts title="Signature"
 class JobQueueService implements OnModuleDestroy {
-    started: boolean
     constructor(configService: ConfigService, jobBufferService: JobBufferService)
     createQueue(options: CreateQueueOptions<Data>) => Promise<JobQueue<Data>>;
     start() => Promise<void>;
@@ -55,11 +54,6 @@ class JobQueueService implements OnModuleDestroy {
 
 <div className="members-wrapper">
 
-### started
-
-<MemberInfo kind="property" type={`boolean`}   />
-
-Returns `true` if the job queues have been started.
 ### constructor
 
 <MemberInfo kind="method" type={`(configService: ConfigService, jobBufferService: JobBufferService) => JobQueueService`}   />

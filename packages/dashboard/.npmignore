@@ -1,9 +1,0 @@
-# Exclude Storybook files from npm package
-**/*.stories.tsx
-**/*.stories.ts
-
-# Storybook configuration
-.storybook/
-
-# Development files
-*.log
