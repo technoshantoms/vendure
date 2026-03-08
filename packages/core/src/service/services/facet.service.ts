@@ -112,23 +112,17 @@ export class FacetService {
         lang?: LanguageCode,
     ): Promise<Translated<Facet> | undefined> {
         const relations = ['values', 'values.facet'];
-        const [repository, facetCode, languageCode, channelLanguageCode] =
+        const [repository, facetCode, languageCode] =
             ctxOrFacetCode instanceof RequestContext
-                ? [
-                      this.connection.getRepository(ctxOrFacetCode, Facet),
-                      facetCodeOrLang,
-                      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-                      lang!,
-                      ctxOrFacetCode.channel.defaultLanguageCode,
-                  ]
+                ? // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+                  [this.connection.getRepository(ctxOrFacetCode, Facet), facetCodeOrLang, lang!]
                 : [
                       this.connection.rawConnection.getRepository(Facet),
                       ctxOrFacetCode,
                       facetCodeOrLang as LanguageCode,
-                      undefined,
                   ];
-        const globalDefaultLanguageCode = this.configService.defaultLanguageCode;
 
+        // TODO: Implement usage of channelLanguageCode
         return repository
             .findOne({
                 where: {
@@ -138,14 +132,7 @@ export class FacetService {
             })
             .then(
                 facet =>
-                    (facet &&
-                        translateDeep(
-                            facet,
-                            channelLanguageCode
-                                ? [languageCode, channelLanguageCode, globalDefaultLanguageCode]
-                                : [languageCode, globalDefaultLanguageCode],
-                            ['values', ['values', 'facet']],
-                        )) ??
+                    (facet && translateDeep(facet, languageCode, ['values', ['values', 'facet']])) ??
                     undefined,
             );
     }

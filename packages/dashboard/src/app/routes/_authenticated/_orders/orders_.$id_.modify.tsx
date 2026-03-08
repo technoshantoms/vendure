@@ -1,14 +1,13 @@
 import { ErrorPage } from '@/vdb/components/shared/error-page.js';
 import { Button } from '@/vdb/components/ui/button.js';
-import {    Page,
+import {
+    Page,
     PageActionBar,
+    PageActionBarRight,
     PageBlock,
     PageLayout,
     PageTitle,
 } from '@/vdb/framework/layout-engine/page-layout.js';
-import { ActionBarItem } from '@/vdb/framework/layout-engine/action-bar-item-wrapper.js';
-import { addCustomFields } from '@/vdb/framework/document-introspection/add-custom-fields.js';
-import { useCustomFieldConfig } from '@/vdb/hooks/use-custom-field-config.js';
 import { getDetailQueryOptions, useDetailPage } from '@/vdb/framework/page/use-detail-page.js';
 import { api } from '@/vdb/graphql/api.js';
 import { Trans, useLingui } from '@lingui/react/macro';
@@ -45,9 +44,7 @@ function ModifyOrderPage() {
     const queryClient = useQueryClient();
     const { form, submitHandler, entity } = useDetailPage({
         pageId,
-        queryDocument: addCustomFields(orderDetailDocument, {
-            includeNestedFragments: ['OrderLine', 'Fulfillment'],
-        }),
+        queryDocument: orderDetailDocument,
         setValuesForUpdate: entity => {
             return {
                 id: entity.id,
@@ -75,8 +72,7 @@ function ModifyOrderPage() {
     const { transitionToPreModifyingState, ManuallySelectNextState, selectNextState, transitionToState } =
         useTransitionOrderToState(entity?.id ?? '');
 
-    const orderLineCustomFields = useCustomFieldConfig('OrderLine');
-
+    // Use the custom hook for order modification logic
     const {
         modifyOrderInput,
         addedVariants,
@@ -90,7 +86,6 @@ function ModifyOrderPage() {
         updateBillingAddress: updateBillingAddressInInput,
         addSurcharge,
         setNote,
-        setRecalculateShipping,
         hasModifications,
     } = useModifyOrder(entity);
 
@@ -120,7 +115,6 @@ function ModifyOrderPage() {
         modifyOrderInput,
         addedVariants,
         eligibleShippingMethods?.eligibleShippingMethodsForDraftOrder,
-        orderLineCustomFields.map(f => f.name),
     );
 
     // On successful state transition, invalidate the order detail query and navigate to the order detail page
@@ -168,11 +162,11 @@ function ModifyOrderPage() {
                 <Trans>Modify order</Trans>
             </PageTitle>
             <PageActionBar>
-                <ActionBarItem itemId="cancel-modification-button">
+                <PageActionBarRight>
                     <Button type="button" variant="secondary" onClick={handleCancelModificationClick}>
                         <Trans>Cancel modification</Trans>
                     </Button>
-                </ActionBarItem>
+                </PageActionBarRight>
             </PageActionBar>
             <PageLayout>
                 <PageBlock column="main" blockId="order-lines" title={<Trans>Order lines</Trans>}>
@@ -211,7 +205,6 @@ function ModifyOrderPage() {
                             })) ?? []
                         }
                         onNoteChange={setNote}
-                        onRecalculateShippingChange={setRecalculateShipping}
                     />
                     <div className="mt-4 flex justify-end">
                         <Button
@@ -246,27 +239,24 @@ function ModifyOrderPage() {
                 </PageBlock>
                 <PageBlock column="side" blockId="addresses" title={<Trans>Addresses</Trans>}>
                     <div className="mb-4">
-                        <div className="mb-1 flex items-center">
+                        <div className="mb-1">
                             <Trans>Shipping address</Trans>:
-                            {editingShippingAddress ? (
-                                <CustomerAddressSelector
-                                    customerId={entity.customer?.id}
-                                    onSelect={handleSelectShippingAddress}
-                                    onCancel={() => setEditingShippingAddress(false)}
-                                    defaultOpen
-                                />
-                            ) : (
-                                <Button
-                                    variant="ghost"
-                                    size="sm"
-                                    className="ml-2"
-                                    onClick={() => setEditingShippingAddress(true)}
-                                >
-                                    <Trans>Edit</Trans>
-                                </Button>
-                            )}
+                            <Button
+                                variant="ghost"
+                                size="sm"
+                                className="ml-2"
+                                onClick={() => setEditingShippingAddress(true)}
+                            >
+                                <Trans>Edit</Trans>
+                            </Button>
                         </div>
-                        {shippingAddress ? (
+                        {editingShippingAddress ? (
+                            <CustomerAddressSelector
+                                customerId={entity.customer?.id}
+                                onSelect={handleSelectShippingAddress}
+                            />
+                        ) : null}
+                        {shippingAddress && !editingShippingAddress ? (
                             <OrderAddress address={shippingAddress} />
                         ) : (
                             <div className="text-muted-foreground text-xs font-medium">
@@ -275,27 +265,24 @@ function ModifyOrderPage() {
                         )}
                     </div>
                     <div>
-                        <div className="mb-1 flex items-center">
+                        <div className="mb-1">
                             <Trans>Billing address</Trans>:
-                            {editingBillingAddress ? (
-                                <CustomerAddressSelector
-                                    customerId={entity.customer?.id}
-                                    onSelect={handleSelectBillingAddress}
-                                    onCancel={() => setEditingBillingAddress(false)}
-                                    defaultOpen
-                                />
-                            ) : (
-                                <Button
-                                    variant="ghost"
-                                    size="sm"
-                                    className="ml-2"
-                                    onClick={() => setEditingBillingAddress(true)}
-                                >
-                                    <Trans>Edit</Trans>
-                                </Button>
-                            )}
+                            <Button
+                                variant="ghost"
+                                size="sm"
+                                className="ml-2"
+                                onClick={() => setEditingBillingAddress(true)}
+                            >
+                                <Trans>Edit</Trans>
+                            </Button>
                         </div>
-                        {billingAddress ? (
+                        {editingBillingAddress ? (
+                            <CustomerAddressSelector
+                                customerId={entity.customer?.id}
+                                onSelect={handleSelectBillingAddress}
+                            />
+                        ) : null}
+                        {billingAddress && !editingBillingAddress ? (
                             <OrderAddress address={billingAddress} />
                         ) : (
                             <div className="text-muted-foreground text-xs font-medium">
