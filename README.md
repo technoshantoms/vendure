@@ -32,15 +32,26 @@
 
 ## What is Vendure Core
 
-Vendure Core is the open source heart of [Vendure](https://satia.shop), the enterprise commerce platform. Built with _TypeScript_ and _Node.js_, it provides a robust foundation for building enterprise-grade digital commerce applications with exceptional scalability and maintainability.
+feat(core): Make ProductOptionGroup & ProductOption shared and channel-aware
+ProductOptionGroups are no longer owned by a single Product via a ManyToOne FK.
+Instead, they use a ManyToMany relationship allowing groups to be shared across
+multiple products, eliminating massive data duplication in production (99.9%
+duplicate option groups, 88.7% duplicate options per issue #3489).
 
-- **Built for heavy customization**: Extensible plugin architecture allows you to tailor every aspect of your commerce solution
-- **Modern, AI-optimized tech stack**: Built on TypeScript, Node.js, NestJS, and GraphQL for outstanding performance and developer experience
-- **Headless architecture**: API-first design enables seamless multichannel commerce across any frontend
-- **Enterprise-ready**: Trusted by thousands of teams worldwide, from startups to Fortune 500 companies
-- **Rich feature set**: Comprehensive out-of-the-box functionality with customizable admin dashboard and commerce framework
+Both ProductOptionGroup and ProductOption now implement ChannelAware with
+ManyToMany channel relations, following the existing Facet/FacetValue pattern.
 
-Whether you're building a B2B platform, multi-vendor marketplace, or D2C storefront, Vendure Core provides the flexible foundation to create unique commerce experiences tailored to your business needs.
+Key changes:
+- Entity: ManyToOne Product->ProductOptionGroup becomes ManyToMany with JoinTable
+- Entity: ProductOptionGroup & ProductOption gain channel relations (ChannelAware)
+- Service: All queries are now channel-scoped via ListQueryBuilder/findOneInChannel
+- API: productOptionGroups query returns paginated ProductOptionGroupList
+- API: New mutations for delete, assign/remove channel operations
+- Product: addOptionGroupToProduct allows sharing groups across products
+- Product: removeOptionGroupFromProduct detaches without deleting
+- Product: assignProductsToChannel propagates to option groups & options
+- Duplicator: Shares option groups instead of copying them
+- Importer: Assigns channels on creation
 
 ## Getting Started
 
