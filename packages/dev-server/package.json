@@ -26,9 +26,13 @@
         "@vendure/core": "3.5.5",
         "@vendure/elasticsearch-plugin": "3.5.5",
         "@vendure/email-plugin": "3.5.5",
+        "bcrypt": "^6.0.0",
+        "better-sqlite3": "^12.9.0",
+        "dotenv": "^17.4.2",
         "typescript": "5.8.2"
     },
     "devDependencies": {
+        "@types/better-sqlite3": "^7.6.13",
         "@vendure/testing": "3.5.5",
         "@vendure/ui-devkit": "3.5.5",
         "commander": "^12.0.0",

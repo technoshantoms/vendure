@@ -1,258 +1,115 @@
-/* eslint-disable no-console */
+// eslint-disable-next-line @typescript-eslint/triple-slash-reference
+/// <reference path="../core/typings.d.ts" />
 import { AdminUiPlugin } from '@vendure/admin-ui-plugin';
 import { AssetServerPlugin } from '@vendure/asset-server-plugin';
-import { ADMIN_API_PATH, API_PORT, SHOP_API_PATH } from '@vendure/common/lib/shared-constants';
-import { OnApplicationBootstrap } from '@nestjs/common';
 import {
     DefaultJobQueuePlugin,
     DefaultLogger,
-    DefaultSchedulerPlugin,
     DefaultSearchPlugin,
     dummyPaymentHandler,
     LogLevel,
-    PluginCommonModule,
-    RequestContextService,
-    SettingsStoreScopes,
-    SettingsStoreService,
+    mergeConfig,
     VendureConfig,
-    VendurePlugin,
 } from '@vendure/core';
-import { DashboardPlugin } from '@vendure/dashboard/plugin';
 import { defaultEmailHandlers, EmailPlugin, FileBasedTemplateLoader } from '@vendure/email-plugin';
-import { GraphiqlPlugin } from '@vendure/graphiql-plugin';
-import { SentryPlugin } from '@vendure/sentry-plugin';
-import { TelemetryPlugin } from '@vendure/telemetry-plugin';
-import 'dotenv/config';
 import path from 'path';
-import { DataSourceOptions } from 'typeorm';
-import { ReviewsPlugin } from './test-plugins/reviews/reviews-plugin';
 
-const IS_INSTRUMENTED = process.env.IS_INSTRUMENTED === 'true';
+import { MultivendorPlugin } from './example-plugins/multivendor-plugin/multivendor.plugin';
 
-@VendurePlugin({
-    imports: [PluginCommonModule],
-    configuration: config => {
-        config.settingsStoreFields = {
-            ...config.settingsStoreFields,
-            ReadonlyTest: [
-                { name: 'buildVersion', readonly: true },
-                { name: 'buildMeta', readonly: true },
-            ],
-        };
-        return config;
-    },
-})
-class ReadonlySettingsTestPlugin implements OnApplicationBootstrap {
-    constructor(
-        private settingsStoreService: SettingsStoreService,
-        private requestContextService: RequestContextService,
-    ) {}
-    async onApplicationBootstrap() {
-        const ctx = await this.requestContextService.create({ apiType: 'admin' });
-        await this.settingsStoreService.set(ctx, 'ReadonlyTest.buildVersion', 'v3.5.2' as any);
-        await this.settingsStoreService.set(ctx, 'ReadonlyTest.buildMeta', {
-            buildDate: '2026-03-06',
-            commit: 'd0384f3ed',
-            features: ['settings-store-ui', 'option-groups'],
-        });
-    }
-}
+function getDbConfig(): VendureConfig['dbConnectionOptions'] {
+    const dbType = process.env.DB ?? 'mysql';
 
-/**
- * Config settings used during development
- */
-export const devConfig: VendureConfig = {
-    apiOptions: {
-        port: API_PORT,
-        adminApiPath: ADMIN_API_PATH,
-        adminApiPlayground: {
-            settings: {
-                'request.credentials': 'include',
-            },
-        },
-        adminApiDebug: true,
-        shopApiPath: SHOP_API_PATH,
-        shopApiPlayground: {
-            settings: {
-                'request.credentials': 'include',
-            },
-        },
-        shopApiDebug: true,
-    },
-    authOptions: {
-        disableAuth: false,
-        tokenMethod: ['bearer', 'cookie', 'api-key'] as const,
-        requireVerification: true,
-        customPermissions: [],
-        cookieOptions: {
-            secret: 'abc',
-        },
-    },
-    dbConnectionOptions: {
-        synchronize: false,
-        logging: false,
-        migrations: [path.join(__dirname, 'migrations/*.ts')],
-        ...getDbConfig(),
-    },
-    paymentOptions: {
-        paymentMethodHandlers: [dummyPaymentHandler],
-    },
-    settingsStoreFields: {
-        MyPlugin: [
-            {
-                name: 'globalVal',
-            },
-            {
-                name: 'userVal',
-                scope: SettingsStoreScopes.user,
-            },
-        ],
-    },
-    customFields: {},
-    logger: new DefaultLogger({ level: LogLevel.Verbose }),
-    importExportOptions: {
-        importAssetsDir: path.join(__dirname, 'import-assets'),
-    },
-    plugins: [
-        // MultivendorPlugin.init({
-        //     platformFeePercent: 10,
-        //     platformFeeSKU: 'FEE',
-        // }),
-        ReadonlySettingsTestPlugin,
-        ReviewsPlugin,
-        GraphiqlPlugin.init(),
-        AssetServerPlugin.init({
-            route: 'assets',
-            assetUploadDir: path.join(__dirname, 'assets'),
-        }),
-        DefaultSearchPlugin.init({ bufferUpdates: false, indexStockStatus: false }),
-        // Enable if you need to debug the job queue
-        // BullMQJobQueuePlugin.init({}),
-        DefaultJobQueuePlugin.init({}),
-        // JobQueueTestPlugin.init({ queueCount: 10 }),
-        // ElasticsearchPlugin.init({
-        //     host: 'http://localhost',
-        //     port: 9200,
-        //     bufferUpdates: true,
-        // }),
-        DefaultSchedulerPlugin.init({}),
-        EmailPlugin.init({
-            devMode: true,
-            route: 'mailbox',
-            handlers: defaultEmailHandlers,
-            templateLoader: new FileBasedTemplateLoader(path.join(__dirname, '../email-plugin/templates')),
-            outputPath: path.join(__dirname, 'test-emails'),
-            globalTemplateVars: {
-                verifyEmailAddressUrl: 'http://localhost:4201/verify',
-                passwordResetUrl: 'http://localhost:4201/reset-password',
-                changeEmailAddressUrl: 'http://localhost:4201/change-email-address',
-            },
-        }),
-        ...(IS_INSTRUMENTED ? [TelemetryPlugin.init({})] : []),
-        ...(process.env.ENABLE_SENTRY === 'true' && process.env.SENTRY_DSN
-            ? [
-                SentryPlugin.init({
-                    includeErrorTestMutation: true,
-                }),
-            ]
-            : []),
-        // AdminUiPlugin.init({
-        //     route: 'admin',
-        //     port: 5001,
-        //     adminUiConfig: {},
-        //     // Un-comment to compile a custom admin ui
-        //     // app: compileUiExtensions({
-        //     //     outputPath: path.join(__dirname, './custom-admin-ui'),
-        //     //     extensions: [
-        //     //         {
-        //     //             id: 'ui-extensions-library',
-        //     //             extensionPath: path.join(__dirname, 'example-plugins/ui-extensions-library/ui'),
-        //     //             routes: [{ route: 'ui-library', filePath: 'routes.ts' }],
-        //     //             providers: ['providers.ts'],
-        //     //         },
-        //     //         {
-        //     //             globalStyles: path.join(
-        //     //                 __dirname,
-        //     //                 'test-plugins/with-ui-extension/ui/custom-theme.scss',
-        //     //             ),
-        //     //         },
-        //     //     ],
-        //     //     devMode: true,
-        //     // }),
-        // }),
-        AdminUiPlugin.init({
-            route: 'admin',
-            port: 5001,
-            adminUiConfig: {},
-            // Un-comment to compile a custom admin ui
-            // app: compileUiExtensions({
-            //     outputPath: path.join(__dirname, './custom-admin-ui'),
-            //     extensions: [
-            //         {
-            //             id: 'ui-extensions-library',
-            //             extensionPath: path.join(__dirname, 'example-plugins/ui-extensions-library/ui'),
-            //             routes: [{ route: 'ui-library', filePath: 'routes.ts' }],
-            //             providers: ['providers.ts'],
-            //         },
-            //         {
-            //             globalStyles: path.join(
-            //                 __dirname,
-            //                 'test-plugins/with-ui-extension/ui/custom-theme.scss',
-            //             ),
-            //         },
-            //     ],
-            //     devMode: true,
-            // }),
-        }),
-        DashboardPlugin.init({
-            route: 'dashboard',
-            appDir: path.join(__dirname, './dist'),
-        }),
-    ],
-};
-
-function getDbConfig(): DataSourceOptions {
-    const dbType = process.env.DB || 'mysql';
     switch (dbType) {
         case 'postgres':
-            console.log('Using postgres connection');
             return {
-                synchronize: true,
                 type: 'postgres',
-                host: process.env.DB_HOST || 'localhost',
-                port: Number(process.env.DB_PORT) || 5432,
-                username: process.env.DB_USERNAME || 'vendure',
-                password: process.env.DB_PASSWORD || 'password',
-                database: process.env.DB_NAME || 'vendure-dev',
-                schema: process.env.DB_SCHEMA || 'public',
+                host: process.env.DB_HOST ?? '127.0.0.1',
+                port: Number(process.env.DB_PORT ?? 5432),
+                username: process.env.DB_USERNAME ?? 'vendure',
+                password: process.env.DB_PASSWORD ?? 'password',
+                database: process.env.DB_NAME ?? 'vendure-dev',
+                schema: process.env.DB_SCHEMA ?? 'public',
+                synchronize: false,
+                migrations: [path.join(__dirname, 'migrations/*.js')],
             };
         case 'sqlite':
-            console.log('Using sqlite connection');
             return {
-                synchronize: true,
                 type: 'better-sqlite3',
                 database: path.join(__dirname, 'vendure.sqlite'),
-            };
-        case 'sqljs':
-            console.log('Using sql.js connection');
-            return {
-                type: 'sqljs',
-                autoSave: true,
-                database: new Uint8Array([]),
-                location: path.join(__dirname, 'vendure.sqlite'),
+                synchronize: false,
+                migrations: [path.join(__dirname, 'migrations/*.js')],
             };
         case 'mysql':
-        case 'mariadb':
         default:
-            console.log('Using mysql connection');
             return {
-                synchronize: true,
                 type: 'mariadb',
-                host: '127.0.0.1',
-                port: 3306,
-                username: 'vendure',
-                password: 'password',
-                database: 'vendure-dev',
+                host: process.env.DB_HOST ?? '127.0.0.1',
+                port: Number(process.env.DB_PORT ?? 3306),
+                username: process.env.DB_USERNAME ?? 'vendure',
+                password: process.env.DB_PASSWORD ?? 'password',
+                database: process.env.DB_NAME ?? 'vendure-dev',
+                synchronize: false,
+                migrations: [path.join(__dirname, 'migrations/*.js')],
             };
     }
 }
+
+export const devConfig: VendureConfig = mergeConfig(
+    {
+        apiOptions: {
+            port: 3000,
+            adminApiPath: 'admin-api',
+            shopApiPath: 'shop-api',
+        },
+        authOptions: {
+            tokenMethod: ['bearer', 'cookie'] as const,
+            superadminCredentials: {
+                identifier: process.env.SUPERADMIN_USERNAME ?? 'superadmin',
+                password: process.env.SUPERADMIN_PASSWORD ?? 'superadmin',
+            },
+            cookieOptions: {
+                secret: process.env.COOKIE_SECRET ?? 'cookie-secret',
+            },
+        },
+        dbConnectionOptions: getDbConfig(),
+        paymentOptions: {
+            paymentMethodHandlers: [dummyPaymentHandler],
+        },
+        logger: new DefaultLogger({ level: LogLevel.Debug }),
+        importExportOptions: {
+            importAssetsDir: path.join(__dirname, '../core/mock-data/assets'),
+        },
+        plugins: [
+            AssetServerPlugin.init({
+                route: 'assets',
+                assetUploadDir: path.join(__dirname, 'assets'),
+            }),
+            DefaultJobQueuePlugin.init({ pollInterval: 3000 }),
+            DefaultSearchPlugin.init({ bufferUpdates: false, indexStockStatus: true }),
+            EmailPlugin.init({
+                route: 'mailbox',
+                devMode: true,
+                outputPath: path.join(__dirname, 'test-emails'),
+                handlers: defaultEmailHandlers,
+                templateLoader: new FileBasedTemplateLoader(
+                    path.join(__dirname, '../email-plugin/templates'),
+                ),
+                globalTemplateVars: {
+                    fromAddress: '"Vendure Dev" <noreply@vendure.io>',
+                    verifyEmailAddressUrl: 'http://localhost:8080/verify',
+                    passwordResetUrl: 'http://localhost:8080/password-reset',
+                    changeEmailAddressUrl: 'http://localhost:8080/verify-email-address-change',
+                },
+            }),
+            // AdminUiPlugin.init({
+            //     route: 'admin',
+            //     port: 3002,
+            // }),
+            MultivendorPlugin.init({
+                platformFeePercent: 10,
+                platformFeeSKU: 'FEE',
+            }),
+        ],
+    },
+    {},
+);
